@@ -1,0 +1,1209 @@
+<section id="network-architecture" class="content-section" data-layer="3">
+  <h2>Network Architecture</h2>
+  <p class="section-intro">The network fabric is the nervous system of a GPU Superpod. Every collective operation, every gradient exchange, every activation transfer flows through this infrastructure. A poorly designed network turns a $200M compute investment into idle silicon. This section covers the topology, protocols, and redundancy mechanisms that make large-scale distributed GPU training possible.</p>
+
+  <!-- ============================================================ -->
+  <!-- 1. SPINE-LEAF (CLOS) TOPOLOGY                                -->
+  <!-- ============================================================ -->
+  <h3 id="spine-leaf-topology">1. Spine-Leaf (Clos) Topology</h3>
+
+  <div class="info-card">
+    <h4>Why Spine-Leaf?</h4>
+    <p>Traditional three-tier architectures (access &rarr; aggregation &rarr; core) create bottlenecks, require Spanning Tree Protocol (STP) to prevent loops, and produce unpredictable latency. The spine-leaf (Clos) topology eliminates these problems:</p>
+    <ul>
+      <li><strong>Predictable latency:</strong> Every server-to-server path traverses exactly one leaf &rarr; spine &rarr; leaf hop (or leaf &rarr; spine &rarr; super-spine &rarr; spine &rarr; leaf in 3-tier). Maximum hop count is fixed regardless of fabric size.</li>
+      <li><strong>No STP:</strong> All links are active simultaneously. ECMP (Equal-Cost Multi-Path) provides loop-free multi-pathing at L3. No blocked ports, no wasted bandwidth.</li>
+      <li><strong>Horizontal scalability:</strong> Adding capacity means adding more leaf switches (for ports) or more spine switches (for bandwidth). The architecture scales linearly.</li>
+      <li><strong>Full bisection bandwidth:</strong> In a non-blocking configuration, the aggregate bandwidth between any two halves of the fabric equals the total server-facing bandwidth. Every server can communicate at line rate simultaneously.</li>
+    </ul>
+  </div>
+
+  <div class="info-card">
+    <h4>Fat-Tree Topology for HPC</h4>
+    <p>Charles Leiserson's fat-tree (1985) is the theoretical basis for modern Clos fabrics. In a fat-tree, links get "fatter" (higher bandwidth) as you move up the tree. In practice, this is achieved by increasing the number of equal-bandwidth links at each tier rather than using physically wider links.</p>
+    <p>For GPU clusters, a <strong>non-blocking fat-tree</strong> is essential. During AllReduce operations, every GPU sends data to every other GPU simultaneously. Any oversubscription at the spine layer creates a bottleneck that slows the entire collective, wasting GPU cycles across the cluster.</p>
+  </div>
+
+  <div class="expandable">
+    <button class="expandable-toggle">Leaf, Spine, and Super-Spine Roles (click to expand)</button>
+    <div class="expandable-content">
+      <h4>Leaf Switches (Top-of-Rack / ToR)</h4>
+      <ul>
+        <li>Positioned at the top of each server rack</li>
+        <li>Downlink ports connect to servers, GPUs (via ConnectX-7 NICs), and storage nodes</li>
+        <li>Uplink ports connect to every spine switch in the fabric</li>
+        <li>Typical: NVIDIA Spectrum-4 SN5600 with 64x 400GbE ports, or Quantum-2 QM9700 with 64x NDR (400Gb/s) InfiniBand ports</li>
+        <li>Each leaf has a unique /31 or unnumbered link to every spine</li>
+        <li>Performs L2 switching locally (within rack) and L3 routing to the fabric</li>
+      </ul>
+      <h4>Spine Switches</h4>
+      <ul>
+        <li>Every spine connects to every leaf switch in the pod</li>
+        <li>No servers connect directly to spine switches</li>
+        <li>Purpose: provide full mesh connectivity between all leaves</li>
+        <li>For a non-blocking fabric: total spine uplink bandwidth from each leaf must equal total server-facing bandwidth on that leaf</li>
+        <li>Example: 32 server ports at 400G = 12.8 Tb/s down &rarr; need 32 uplinks at 400G = 12.8 Tb/s to spines</li>
+      </ul>
+      <h4>Super-Spine (3-Tier Clos)</h4>
+      <ul>
+        <li>Required when the fabric exceeds what a single spine tier can interconnect</li>
+        <li>A pod = one complete leaf+spine fabric. Super-spines connect pods together.</li>
+        <li>NVIDIA DGX SuperPOD with 256+ DGX nodes typically requires super-spine for the InfiniBand compute fabric</li>
+        <li>Each spine connects to every super-spine; each super-spine connects to every spine across all pods</li>
+        <li>Maximum 3-tier fat-tree with 64-port switches: 64 pods &times; 32 leaves/pod &times; 32 servers/leaf = 65,536 endpoints</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="spec-table">
+    <h4>Oversubscription Ratios</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>Ratio</th>
+          <th>Meaning</th>
+          <th>Use Case</th>
+          <th>Cost Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>1:1 (Non-blocking)</strong></td>
+          <td>Spine bandwidth = leaf server bandwidth. Every port can run at line rate simultaneously.</td>
+          <td>GPU training clusters, HPC, InfiniBand fabrics. Mandatory for AllReduce-heavy workloads.</td>
+          <td>Highest cost. Requires maximum spine switch count.</td>
+        </tr>
+        <tr>
+          <td><strong>2:1</strong></td>
+          <td>Half the spine bandwidth vs server bandwidth. Statistical multiplexing assumed.</td>
+          <td>Storage networks, inference serving, enterprise workloads where not all hosts communicate simultaneously.</td>
+          <td>~50% fewer spine switches and uplinks.</td>
+        </tr>
+        <tr>
+          <td><strong>3:1</strong></td>
+          <td>One-third spine bandwidth vs server bandwidth.</td>
+          <td>General enterprise, web serving, microservices. Acceptable when traffic is bursty and not all-to-all.</td>
+          <td>Significant savings on spine infrastructure.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout callout-important">
+    <h4>Rail-Optimized Topology</h4>
+    <p>In NVIDIA's rail-optimized design for DGX H100/B200 clusters, each of the 8 GPU NICs in a server connects to a <strong>different leaf switch</strong> (a different "rail"). GPU 0 across all servers connects to Rail 0 leaf switches, GPU 1 to Rail 1 leaf switches, and so on.</p>
+    <p>This means intra-rail traffic (GPU 0 on server A talking to GPU 0 on server B) stays within a single leaf switch or traverses one leaf-spine-leaf path, while cross-rail traffic uses NVSwitch/NVLink within the node. This aligns the physical topology with NCCL's ring/tree algorithms, reduces the number of spine switches needed, and confines most collective traffic to a single rail, dramatically simplifying traffic engineering.</p>
+    <p>For a 32-node DGX H100 pod with 8 rails: 8 leaf switches (one per rail), each with 32 downlinks (one per server's GPU N) and uplinks to shared spine switches. A 256-node SuperPOD uses 8 rails &times; 8 leaf switches per rail = 64 leaf switches.</p>
+  </div>
+
+  <!-- Spine-Leaf SVG Diagram -->
+  <div class="diagram-container">
+    <h4>Spine-Leaf Topology: Compute Fabric (InfiniBand) &amp; Management/Storage Fabric (Ethernet)</h4>
+    <svg viewBox="0 0 1100 720" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:1100px;" role="img" aria-label="Spine-leaf topology diagram showing InfiniBand compute fabric and Ethernet management fabric">
+      <defs>
+        <marker id="arr-ib" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6Z" fill="#76b900"/></marker>
+        <marker id="arr-eth" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6Z" fill="#2196F3"/></marker>
+      </defs>
+      <!-- Background -->
+      <rect width="1100" height="720" fill="#0d1117" rx="8"/>
+      <!-- Title -->
+      <text x="550" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Dual-Fabric Spine-Leaf Architecture</text>
+      <!-- Legend -->
+      <rect x="30" y="50" width="18" height="12" fill="#76b900" rx="2"/>
+      <text x="55" y="61" fill="#adbac7" font-size="12">InfiniBand Compute Fabric (NDR 400Gb/s)</text>
+      <rect x="330" y="50" width="18" height="12" fill="#2196F3" rx="2"/>
+      <text x="355" y="61" fill="#adbac7" font-size="12">Ethernet Management / Storage Fabric (100/400GbE)</text>
+      <rect x="700" y="50" width="18" height="12" fill="#FF9800" rx="2"/>
+      <text x="725" y="61" fill="#adbac7" font-size="12">DGX Server Nodes</text>
+
+      <!-- === INFINIBAND FABRIC (Left Side) === -->
+      <text x="280" y="90" text-anchor="middle" fill="#76b900" font-size="14" font-weight="bold">InfiniBand Compute Fabric</text>
+
+      <!-- Super-Spine IB -->
+      <text x="280" y="118" text-anchor="middle" fill="#8b949e" font-size="11">Super-Spine Tier</text>
+      <rect x="140" y="125" width="120" height="36" rx="6" fill="#2d4a00" stroke="#76b900" stroke-width="2"/>
+      <text x="200" y="148" text-anchor="middle" fill="#76b900" font-size="11" font-weight="bold">QM9700 SS-0</text>
+      <rect x="300" y="125" width="120" height="36" rx="6" fill="#2d4a00" stroke="#76b900" stroke-width="2"/>
+      <text x="360" y="148" text-anchor="middle" fill="#76b900" font-size="11" font-weight="bold">QM9700 SS-1</text>
+
+      <!-- Spine IB -->
+      <text x="280" y="200" text-anchor="middle" fill="#8b949e" font-size="11">Spine Tier</text>
+      <rect x="60" y="210" width="110" height="36" rx="6" fill="#1a3300" stroke="#76b900" stroke-width="1.5"/>
+      <text x="115" y="233" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">QM9700 Sp-0</text>
+      <rect x="195" y="210" width="110" height="36" rx="6" fill="#1a3300" stroke="#76b900" stroke-width="1.5"/>
+      <text x="250" y="233" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">QM9700 Sp-1</text>
+      <rect x="330" y="210" width="110" height="36" rx="6" fill="#1a3300" stroke="#76b900" stroke-width="1.5"/>
+      <text x="385" y="233" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">QM9700 Sp-2</text>
+      <rect x="465" y="210" width="110" height="36" rx="6" fill="#1a3300" stroke="#76b900" stroke-width="1.5"/>
+      <text x="520" y="233" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">QM9700 Sp-3</text>
+
+      <!-- Super-Spine to Spine links IB -->
+      <line x1="200" y1="161" x2="115" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="200" y1="161" x2="250" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="200" y1="161" x2="385" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="200" y1="161" x2="520" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="360" y1="161" x2="115" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="360" y1="161" x2="250" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="360" y1="161" x2="385" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+      <line x1="360" y1="161" x2="520" y2="210" stroke="#76b900" stroke-width="1" opacity="0.5"/>
+
+      <!-- Leaf IB (Rail-optimized) -->
+      <text x="280" y="285" text-anchor="middle" fill="#8b949e" font-size="11">Leaf Tier (Rails) &mdash; 1 leaf per GPU rail</text>
+      <rect x="30" y="295" width="95" height="34" rx="5" fill="#0f2600" stroke="#76b900" stroke-width="1"/>
+      <text x="78" y="316" text-anchor="middle" fill="#76b900" font-size="9" font-weight="bold">Rail 0 Leaf</text>
+      <rect x="140" y="295" width="95" height="34" rx="5" fill="#0f2600" stroke="#76b900" stroke-width="1"/>
+      <text x="188" y="316" text-anchor="middle" fill="#76b900" font-size="9" font-weight="bold">Rail 1 Leaf</text>
+      <rect x="250" y="295" width="95" height="34" rx="5" fill="#0f2600" stroke="#76b900" stroke-width="1"/>
+      <text x="298" y="316" text-anchor="middle" fill="#76b900" font-size="9" font-weight="bold">Rail 2 Leaf</text>
+      <rect x="360" y="295" width="95" height="34" rx="5" fill="#0f2600" stroke="#76b900" stroke-width="1"/>
+      <text x="408" y="316" text-anchor="middle" fill="#76b900" font-size="9" font-weight="bold">Rail 3 Leaf</text>
+      <rect x="470" y="295" width="95" height="34" rx="5" fill="#0f2600" stroke="#76b900" stroke-width="1"/>
+      <text x="518" y="316" text-anchor="middle" fill="#76b900" font-size="9" font-weight="bold">Rail 4-7...</text>
+
+      <!-- Spine to Leaf links IB -->
+      <line x1="115" y1="246" x2="78" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="115" y1="246" x2="188" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="250" y1="246" x2="298" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="250" y1="246" x2="78" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="385" y1="246" x2="408" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="385" y1="246" x2="298" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="520" y1="246" x2="518" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="520" y1="246" x2="408" y2="295" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+
+      <!-- === ETHERNET FABRIC (Right Side) === -->
+      <text x="830" y="90" text-anchor="middle" fill="#2196F3" font-size="14" font-weight="bold">Ethernet Mgmt / Storage Fabric</text>
+
+      <!-- Spine Eth -->
+      <text x="830" y="200" text-anchor="middle" fill="#8b949e" font-size="11">Spine Tier</text>
+      <rect x="690" y="210" width="120" height="36" rx="6" fill="#0d2137" stroke="#2196F3" stroke-width="1.5"/>
+      <text x="750" y="233" text-anchor="middle" fill="#2196F3" font-size="10" font-weight="bold">SN5600 Sp-0</text>
+      <rect x="840" y="210" width="120" height="36" rx="6" fill="#0d2137" stroke="#2196F3" stroke-width="1.5"/>
+      <text x="900" y="233" text-anchor="middle" fill="#2196F3" font-size="10" font-weight="bold">SN5600 Sp-1</text>
+
+      <!-- Leaf Eth -->
+      <text x="830" y="285" text-anchor="middle" fill="#8b949e" font-size="11">Leaf Tier (ToR)</text>
+      <rect x="650" y="295" width="100" height="34" rx="5" fill="#081a2e" stroke="#2196F3" stroke-width="1"/>
+      <text x="700" y="316" text-anchor="middle" fill="#2196F3" font-size="9" font-weight="bold">Eth Leaf-0</text>
+      <rect x="770" y="295" width="100" height="34" rx="5" fill="#081a2e" stroke="#2196F3" stroke-width="1"/>
+      <text x="820" y="316" text-anchor="middle" fill="#2196F3" font-size="9" font-weight="bold">Eth Leaf-1</text>
+      <rect x="890" y="295" width="100" height="34" rx="5" fill="#081a2e" stroke="#2196F3" stroke-width="1"/>
+      <text x="940" y="316" text-anchor="middle" fill="#2196F3" font-size="9" font-weight="bold">Eth Leaf-2</text>
+
+      <!-- Spine to Leaf links Eth -->
+      <line x1="750" y1="246" x2="700" y2="295" stroke="#2196F3" stroke-width="1" opacity="0.5"/>
+      <line x1="750" y1="246" x2="820" y2="295" stroke="#2196F3" stroke-width="1" opacity="0.5"/>
+      <line x1="750" y1="246" x2="940" y2="295" stroke="#2196F3" stroke-width="1" opacity="0.5"/>
+      <line x1="900" y1="246" x2="700" y2="295" stroke="#2196F3" stroke-width="1" opacity="0.5"/>
+      <line x1="900" y1="246" x2="820" y2="295" stroke="#2196F3" stroke-width="1" opacity="0.5"/>
+      <line x1="900" y1="246" x2="940" y2="295" stroke="#2196F3" stroke-width="1" opacity="0.5"/>
+
+      <!-- === SERVER NODES (Bottom) === -->
+      <text x="550" y="380" text-anchor="middle" fill="#FF9800" font-size="13" font-weight="bold">DGX H100 / B200 Server Nodes</text>
+
+      <!-- Server boxes -->
+      <rect x="50" y="400" width="130" height="60" rx="6" fill="#2a1800" stroke="#FF9800" stroke-width="1.5"/>
+      <text x="115" y="420" text-anchor="middle" fill="#FF9800" font-size="10" font-weight="bold">DGX Node 0</text>
+      <text x="115" y="435" text-anchor="middle" fill="#adbac7" font-size="8">8x ConnectX-7 (IB)</text>
+      <text x="115" y="448" text-anchor="middle" fill="#adbac7" font-size="8">2x 100GbE (Mgmt/Stor)</text>
+
+      <rect x="220" y="400" width="130" height="60" rx="6" fill="#2a1800" stroke="#FF9800" stroke-width="1.5"/>
+      <text x="285" y="420" text-anchor="middle" fill="#FF9800" font-size="10" font-weight="bold">DGX Node 1</text>
+      <text x="285" y="435" text-anchor="middle" fill="#adbac7" font-size="8">8x ConnectX-7 (IB)</text>
+      <text x="285" y="448" text-anchor="middle" fill="#adbac7" font-size="8">2x 100GbE (Mgmt/Stor)</text>
+
+      <rect x="390" y="400" width="130" height="60" rx="6" fill="#2a1800" stroke="#FF9800" stroke-width="1.5"/>
+      <text x="455" y="420" text-anchor="middle" fill="#FF9800" font-size="10" font-weight="bold">DGX Node 2</text>
+      <text x="455" y="435" text-anchor="middle" fill="#adbac7" font-size="8">8x ConnectX-7 (IB)</text>
+      <text x="455" y="448" text-anchor="middle" fill="#adbac7" font-size="8">2x 100GbE (Mgmt/Stor)</text>
+
+      <rect x="620" y="400" width="130" height="60" rx="6" fill="#2a1800" stroke="#FF9800" stroke-width="1.5"/>
+      <text x="685" y="420" text-anchor="middle" fill="#FF9800" font-size="10" font-weight="bold">DGX Node 3</text>
+      <text x="685" y="435" text-anchor="middle" fill="#adbac7" font-size="8">8x ConnectX-7 (IB)</text>
+      <text x="685" y="448" text-anchor="middle" fill="#adbac7" font-size="8">2x 100GbE (Mgmt/Stor)</text>
+
+      <rect x="810" y="400" width="130" height="60" rx="6" fill="#2a1800" stroke="#FF9800" stroke-width="1.5"/>
+      <text x="875" y="420" text-anchor="middle" fill="#FF9800" font-size="10" font-weight="bold">DGX Node N...</text>
+      <text x="875" y="435" text-anchor="middle" fill="#adbac7" font-size="8">8x ConnectX-7 (IB)</text>
+      <text x="875" y="448" text-anchor="middle" fill="#adbac7" font-size="8">2x 100GbE (Mgmt/Stor)</text>
+
+      <!-- IB connections from servers to IB leaves -->
+      <line x1="90" y1="400" x2="78" y2="329" stroke="#76b900" stroke-width="1" opacity="0.4" stroke-dasharray="4,2"/>
+      <line x1="105" y1="400" x2="188" y2="329" stroke="#76b900" stroke-width="1" opacity="0.4" stroke-dasharray="4,2"/>
+      <line x1="120" y1="400" x2="298" y2="329" stroke="#76b900" stroke-width="1" opacity="0.4" stroke-dasharray="4,2"/>
+      <line x1="135" y1="400" x2="408" y2="329" stroke="#76b900" stroke-width="1" opacity="0.4" stroke-dasharray="4,2"/>
+      <line x1="260" y1="400" x2="78" y2="329" stroke="#76b900" stroke-width="1" opacity="0.3" stroke-dasharray="4,2"/>
+      <line x1="275" y1="400" x2="188" y2="329" stroke="#76b900" stroke-width="1" opacity="0.3" stroke-dasharray="4,2"/>
+      <line x1="290" y1="400" x2="298" y2="329" stroke="#76b900" stroke-width="1" opacity="0.3" stroke-dasharray="4,2"/>
+      <line x1="305" y1="400" x2="408" y2="329" stroke="#76b900" stroke-width="1" opacity="0.3" stroke-dasharray="4,2"/>
+
+      <!-- Eth connections from servers to Eth leaves -->
+      <line x1="685" y1="400" x2="700" y2="329" stroke="#2196F3" stroke-width="1" opacity="0.4" stroke-dasharray="4,2"/>
+      <line x1="875" y1="400" x2="820" y2="329" stroke="#2196F3" stroke-width="1" opacity="0.4" stroke-dasharray="4,2"/>
+      <line x1="455" y1="400" x2="940" y2="329" stroke="#2196F3" stroke-width="1" opacity="0.3" stroke-dasharray="4,2"/>
+
+      <!-- Annotations -->
+      <text x="115" y="490" text-anchor="middle" fill="#8b949e" font-size="9">GPU 0 &rarr; Rail 0</text>
+      <text x="115" y="502" text-anchor="middle" fill="#8b949e" font-size="9">GPU 1 &rarr; Rail 1</text>
+      <text x="115" y="514" text-anchor="middle" fill="#8b949e" font-size="9">... (8 NICs &rarr; 8 Rails)</text>
+
+      <!-- Fabric labels at bottom -->
+      <rect x="30" y="540" width="540" height="30" rx="4" fill="#1a2d00" opacity="0.5"/>
+      <text x="300" y="560" text-anchor="middle" fill="#76b900" font-size="11">InfiniBand NDR 400Gb/s &mdash; RDMA, GPUDirect, NCCL collectives</text>
+      <rect x="600" y="540" width="420" height="30" rx="4" fill="#0a1929" opacity="0.5"/>
+      <text x="810" y="560" text-anchor="middle" fill="#2196F3" font-size="11">Ethernet 100/400GbE &mdash; Management, storage (NFS/Lustre), monitoring</text>
+
+      <!-- Key metrics -->
+      <rect x="30" y="590" width="1040" height="110" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="550" y="615" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="bold">Key Fabric Metrics (256-node DGX H100 SuperPOD)</text>
+      <text x="165" y="645" text-anchor="middle" fill="#adbac7" font-size="11">IB Leaf Switches: 64</text>
+      <text x="165" y="665" text-anchor="middle" fill="#8b949e" font-size="10">(8 rails &times; 8 leaves/rail)</text>
+      <text x="410" y="645" text-anchor="middle" fill="#adbac7" font-size="11">IB Spine Switches: 64</text>
+      <text x="410" y="665" text-anchor="middle" fill="#8b949e" font-size="10">(QM9700, non-blocking)</text>
+      <text x="660" y="645" text-anchor="middle" fill="#adbac7" font-size="11">Total IB Bandwidth: 409.6 Tb/s</text>
+      <text x="660" y="665" text-anchor="middle" fill="#8b949e" font-size="10">(2048 GPUs &times; 400Gb/s &times; 0.5 bidir)</text>
+      <text x="920" y="645" text-anchor="middle" fill="#adbac7" font-size="11">Eth Spine: 4-8 switches</text>
+      <text x="920" y="665" text-anchor="middle" fill="#8b949e" font-size="10">(SN5600, 2:1 oversubscribed OK)</text>
+    </svg>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 2. EAST-WEST TRAFFIC                                         -->
+  <!-- ============================================================ -->
+  <h3 id="east-west-traffic">2. East-West Traffic (Data Plane)</h3>
+
+  <div class="info-card">
+    <h4>What Is East-West Traffic?</h4>
+    <p>East-west traffic flows <strong>laterally</strong> between servers, GPUs, and storage nodes <em>within</em> the datacenter. In a GPU training cluster, east-west traffic constitutes <strong>90-99%</strong> of all network traffic. This is fundamentally different from traditional enterprise datacenters where north-south (client-server) traffic dominates.</p>
+    <p>During distributed training of a large language model across 2,048 GPUs, every GPU must exchange gradient data with every other GPU during each training step. A single AllReduce operation on a 175B-parameter model moves approximately <strong>350 GB</strong> of gradient data across the fabric in under 1 second. This is why non-blocking fabric design is non-negotiable.</p>
+  </div>
+
+  <div class="info-card">
+    <h4>NCCL: NVIDIA Collective Communications Library</h4>
+    <p>NCCL is the communication backbone for distributed GPU training. It abstracts the underlying network transport (InfiniBand Verbs, RoCE, TCP sockets) and implements optimized collective operations:</p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Collective</th>
+            <th>Operation</th>
+            <th>Training Use Case</th>
+            <th>Traffic Pattern</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>AllReduce</strong></td>
+            <td>Reduce data across all ranks, result available on all ranks</td>
+            <td>Data parallelism: aggregate gradients from all workers</td>
+            <td>All-to-all; each GPU sends and receives ~2 &times; (N-1)/N &times; data_size</td>
+          </tr>
+          <tr>
+            <td><strong>AllGather</strong></td>
+            <td>Gather data from all ranks to all ranks</td>
+            <td>FSDP (Fully Sharded Data Parallel): reconstruct full model weights</td>
+            <td>All-to-all; total data moved = N &times; shard_size</td>
+          </tr>
+          <tr>
+            <td><strong>ReduceScatter</strong></td>
+            <td>Reduce and scatter result chunks across ranks</td>
+            <td>FSDP: reduce gradients and distribute shards</td>
+            <td>All-to-all; each GPU ends with 1/N of reduced result</td>
+          </tr>
+          <tr>
+            <td><strong>Broadcast</strong></td>
+            <td>Send data from one rank to all others</td>
+            <td>Weight initialization, hyperparameter sync</td>
+            <td>One-to-all; tree-shaped distribution</td>
+          </tr>
+          <tr>
+            <td><strong>Send/Recv (P2P)</strong></td>
+            <td>Point-to-point data transfer between two specific ranks</td>
+            <td>Model/pipeline parallelism: activation exchange between stages</td>
+            <td>Point-to-point; creates predictable flows</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="expandable">
+    <button class="expandable-toggle">NCCL Algorithms: Ring vs Tree (click to expand)</button>
+    <div class="expandable-content">
+      <h4>Ring Algorithm</h4>
+      <p>GPUs are arranged in a logical ring. Data is chunked and pipelined around the ring in two phases: scatter-reduce (each GPU reduces a chunk and passes it on) and allgather (the fully reduced chunks circulate). For N GPUs and data size D:</p>
+      <ul>
+        <li>Each GPU sends: 2 &times; (N-1)/N &times; D total bytes</li>
+        <li>Latency: 2 &times; (N-1) &times; &alpha; (where &alpha; is per-hop latency)</li>
+        <li>Bandwidth-optimal: approaches theoretical limit for large D</li>
+        <li>Latency-suboptimal: O(N) latency terms; slow at large GPU counts with small messages</li>
+        <li>NCCL creates multiple rings across NVLink and network to maximize bandwidth</li>
+      </ul>
+      <h4>Tree Algorithm</h4>
+      <p>GPUs are arranged in a binary tree (or double binary tree for full-duplex utilization). Data flows up the tree (reduce) and down the tree (broadcast).</p>
+      <ul>
+        <li>Latency: 2 &times; log2(N) &times; &alpha; &mdash; dramatically better than ring for large N</li>
+        <li>Bandwidth: each GPU sends 2 &times; D total bytes (less efficient than ring for large D)</li>
+        <li>NCCL auto-selects ring for large messages, tree for small messages (crossover ~256KB-4MB depending on GPU count)</li>
+      </ul>
+      <h4>Mapping to InfiniBand / RoCE</h4>
+      <p>NCCL uses <strong>RDMA</strong> verbs directly over InfiniBand or RoCE v2. Key transport mechanisms:</p>
+      <ul>
+        <li><strong>GPUDirect RDMA:</strong> NIC reads/writes GPU memory directly via PCIe BAR, bypassing CPU and system memory. Reduces latency by ~5&mu;s per transfer.</li>
+        <li><strong>GPUDirect Async:</strong> GPU kernel triggers RDMA operations without CPU involvement, enabling full overlap of compute and communication.</li>
+        <li><strong>SHARP (Scalable Hierarchical Aggregation and Reduction Protocol):</strong> Offloads reduction operations to InfiniBand switch ASICs. The network performs the math during transit, halving the data traversal. Available on Quantum-2 switches.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="info-card">
+    <h4>Traffic Patterns During Distributed Training</h4>
+    <h5>Data Parallelism (AllReduce-dominant)</h5>
+    <p>Each GPU holds a full copy of the model and trains on different data. After the backward pass, gradients are synchronized via AllReduce. For a model with P parameters in FP16, each AllReduce moves approximately 2 &times; P bytes. A 70B-parameter model: 2 &times; 70&times;10<sup>9</sup> = 140 GB per AllReduce. With BF16 gradients, this must complete within the backward pass time (~500ms for typical LLM training) to avoid becoming the bottleneck.</p>
+
+    <h5>Model (Tensor) Parallelism (P2P-dominant)</h5>
+    <p>The model is split across GPUs within a node (typically 8-way tensor parallelism over NVLink). Each layer requires two AllReduce operations on activations (forward + backward). Traffic volume per layer: 2 &times; batch_size &times; sequence_length &times; hidden_dim &times; 2 bytes. This traffic stays within the NVSwitch domain (900 GB/s per GPU on H100) and does not touch the InfiniBand fabric.</p>
+
+    <h5>Pipeline Parallelism (Sequential P2P)</h5>
+    <p>The model is split into stages across nodes. Micro-batches flow between stages via point-to-point Send/Recv. Traffic is sequential and relatively low-bandwidth compared to AllReduce, but latency-sensitive. Typical activation size per micro-batch: batch_size &times; seq_len &times; hidden_dim &times; 2 bytes (~50-200 MB).</p>
+
+    <h5>Fully Sharded Data Parallel (FSDP / ZeRO-3)</h5>
+    <p>Model parameters, gradients, and optimizer states are sharded across GPUs. Before each forward/backward layer, an AllGather reconstructs parameters; after backward, a ReduceScatter distributes gradient shards. This trades 3x more communication for N-fold memory savings. Communication volume per layer: 2 &times; layer_params &times; 2 bytes (AllGather + ReduceScatter).</p>
+  </div>
+
+  <div class="callout callout-warning">
+    <h4>Bandwidth Is Non-Negotiable</h4>
+    <p>In a 2,048-GPU cluster running AllReduce over a ring, each GPU NIC must sustain near line-rate throughput (~385 Gb/s usable out of 400 Gb/s NDR) for the entire duration of the gradient synchronization phase. Even a 10% bandwidth reduction on a single link cascades into a proportional training slowdown across all 2,048 GPUs, because the collective cannot complete until the slowest participant finishes.</p>
+  </div>
+
+  <div class="info-card">
+    <h4>ECMP and Adaptive Routing</h4>
+    <p><strong>ECMP (Equal-Cost Multi-Path)</strong> is the standard mechanism for distributing traffic across multiple spine links. When a leaf switch has 32 equal-cost paths to another leaf (through 32 spine switches), ECMP selects a path using a hash of the packet header fields (5-tuple: src IP, dst IP, src port, dst port, protocol).</p>
+
+    <h5>The Elephant Flow Problem</h5>
+    <p>NCCL generates a small number of very large, long-lived flows ("elephant flows"). With 5-tuple hashing, multiple elephant flows can hash to the same spine link, creating congestion on that path while other paths are idle. In a 32-spine fabric, the probability of at least one collision with just 8 flows is approximately 75% (birthday problem).</p>
+
+    <h5>Solutions</h5>
+    <ul>
+      <li><strong>Adaptive Routing (NVIDIA Quantum-2):</strong> InfiniBand switches dynamically reroute packets based on real-time port congestion. Each packet can take a different path, achieving near-perfect load balancing. This is the preferred solution for InfiniBand fabrics.</li>
+      <li><strong>Packet Spraying:</strong> Each packet is independently routed across all paths. Achieves perfect load balance but requires reordering at the receiver. Supported by some Ethernet switches (e.g., Memory-based Memory Fabrics, Barefoot/Intel Tofino).</li>
+      <li><strong>Flowlet Switching:</strong> Splits flows into "flowlets" (bursts separated by idle gaps) and assigns each flowlet to a different path. Balances load without reordering within a burst. Used by SONiC's dynamic hashing.</li>
+      <li><strong>Larger Hash Entropy:</strong> Using NCCL's multi-port/multi-QP feature to create more parallel connections, increasing the number of flows and reducing collision probability.</li>
+    </ul>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 3. NORTH-SOUTH TRAFFIC                                       -->
+  <!-- ============================================================ -->
+  <h3 id="north-south-traffic">3. North-South Traffic (Control Plane + Ingress/Egress)</h3>
+
+  <div class="info-card">
+    <h4>What Is North-South Traffic?</h4>
+    <p>North-south traffic flows <strong>vertically</strong> between the datacenter and external networks (the internet, other datacenters, cloud providers). In a GPU training cluster, this is typically <strong>less than 5%</strong> of total traffic but is critical for operations:</p>
+    <ul>
+      <li><strong>Model and dataset ingestion:</strong> Downloading training data from S3/GCS/Azure Blob, pulling model checkpoints (can be 100s of GB but infrequent)</li>
+      <li><strong>Checkpoint upload:</strong> Saving model checkpoints to remote storage during training</li>
+      <li><strong>API serving:</strong> If the cluster also serves inference traffic, client requests enter via north-south paths</li>
+      <li><strong>Management:</strong> SSH access, monitoring (Prometheus/Grafana), log shipping (Elasticsearch/Splunk), LDAP/SSO authentication</li>
+      <li><strong>Software updates:</strong> OS patches, driver updates, container image pulls</li>
+    </ul>
+  </div>
+
+  <!-- N-S vs E-W Traffic Flow SVG -->
+  <div class="diagram-container">
+    <h4>North-South vs East-West Traffic Flows</h4>
+    <svg viewBox="0 0 1000 650" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:1000px;" role="img" aria-label="Diagram showing north-south traffic through border routers, firewalls, and load balancers, versus east-west traffic on leaf-spine paths">
+      <rect width="1000" height="650" fill="#0d1117" rx="8"/>
+      <!-- Title -->
+      <text x="500" y="28" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">North-South vs East-West Traffic Flows</text>
+
+      <!-- Legend -->
+      <rect x="30" y="45" width="14" height="10" fill="#f44336" rx="2"/>
+      <text x="50" y="55" fill="#adbac7" font-size="11">North-South (Ingress/Egress)</text>
+      <rect x="250" y="45" width="14" height="10" fill="#76b900" rx="2"/>
+      <text x="270" y="55" fill="#adbac7" font-size="11">East-West (Server-to-Server / GPU-to-GPU)</text>
+
+      <!-- External / Internet Cloud -->
+      <ellipse cx="500" cy="95" rx="130" ry="28" fill="none" stroke="#f44336" stroke-width="1.5" stroke-dasharray="5,3"/>
+      <text x="500" y="100" text-anchor="middle" fill="#f44336" font-size="12" font-weight="bold">Internet / WAN / Cloud</text>
+
+      <!-- North-South path (center) -->
+      <!-- Border Routers -->
+      <line x1="500" y1="123" x2="500" y2="145" stroke="#f44336" stroke-width="2" marker-end="url(#arr-ns)"/>
+      <defs><marker id="arr-ns" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6Z" fill="#f44336"/></marker></defs>
+      <rect x="400" y="145" width="95" height="35" rx="5" fill="#2a1015" stroke="#f44336" stroke-width="1.5"/>
+      <text x="448" y="167" text-anchor="middle" fill="#f44336" font-size="10" font-weight="bold">Border Rtr A</text>
+      <rect x="510" y="145" width="95" height="35" rx="5" fill="#2a1015" stroke="#f44336" stroke-width="1.5"/>
+      <text x="558" y="167" text-anchor="middle" fill="#f44336" font-size="10" font-weight="bold">Border Rtr B</text>
+
+      <!-- Firewall -->
+      <line x1="500" y1="180" x2="500" y2="205" stroke="#f44336" stroke-width="2" marker-end="url(#arr-ns)"/>
+      <rect x="420" y="205" width="160" height="35" rx="5" fill="#2a1a15" stroke="#FF9800" stroke-width="1.5"/>
+      <text x="500" y="227" text-anchor="middle" fill="#FF9800" font-size="10" font-weight="bold">Firewall / DDoS Mitigation</text>
+
+      <!-- Load Balancer -->
+      <line x1="500" y1="240" x2="500" y2="265" stroke="#f44336" stroke-width="2" marker-end="url(#arr-ns)"/>
+      <rect x="420" y="265" width="160" height="35" rx="5" fill="#1a1a2a" stroke="#9C27B0" stroke-width="1.5"/>
+      <text x="500" y="287" text-anchor="middle" fill="#9C27B0" font-size="10" font-weight="bold">Load Balancer (L4/L7)</text>
+
+      <!-- Spine Tier -->
+      <line x1="500" y1="300" x2="500" y2="335" stroke="#f44336" stroke-width="1.5" marker-end="url(#arr-ns)"/>
+      <text x="810" y="352" text-anchor="middle" fill="#8b949e" font-size="11">Spine Tier</text>
+      <rect x="190" y="340" width="105" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="243" y="361" text-anchor="middle" fill="#adbac7" font-size="10">Spine 0</text>
+      <rect x="350" y="340" width="105" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="403" y="361" text-anchor="middle" fill="#adbac7" font-size="10">Spine 1</text>
+      <rect x="540" y="340" width="105" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="593" y="361" text-anchor="middle" fill="#adbac7" font-size="10">Spine 2</text>
+      <rect x="700" y="340" width="105" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="753" y="361" text-anchor="middle" fill="#adbac7" font-size="10">Spine 3</text>
+
+      <!-- Leaf Tier -->
+      <text x="810" y="422" text-anchor="middle" fill="#8b949e" font-size="11">Leaf Tier (ToR)</text>
+      <rect x="100" y="410" width="100" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="150" y="431" text-anchor="middle" fill="#adbac7" font-size="10">Leaf 0</text>
+      <rect x="260" y="410" width="100" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="310" y="431" text-anchor="middle" fill="#adbac7" font-size="10">Leaf 1</text>
+      <rect x="420" y="410" width="100" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="470" y="431" text-anchor="middle" fill="#adbac7" font-size="10">Leaf 2</text>
+      <rect x="580" y="410" width="100" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="630" y="431" text-anchor="middle" fill="#adbac7" font-size="10">Leaf 3</text>
+      <rect x="740" y="410" width="100" height="32" rx="5" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <text x="790" y="431" text-anchor="middle" fill="#adbac7" font-size="10">Leaf 4</text>
+
+      <!-- Spine to Leaf Links -->
+      <line x1="243" y1="372" x2="150" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="243" y1="372" x2="310" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="243" y1="372" x2="470" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="403" y1="372" x2="150" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="403" y1="372" x2="310" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="403" y1="372" x2="630" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="593" y1="372" x2="470" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="593" y1="372" x2="630" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="593" y1="372" x2="790" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="753" y1="372" x2="310" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="753" y1="372" x2="630" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="753" y1="372" x2="790" y2="410" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+
+      <!-- Server Nodes -->
+      <rect x="70" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="110" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 0</text>
+      <rect x="175" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="215" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 1</text>
+      <rect x="310" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="350" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 2</text>
+      <rect x="420" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="460" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 3</text>
+      <rect x="560" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="600" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 4</text>
+      <rect x="670" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="710" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 5</text>
+      <rect x="780" y="475" width="80" height="40" rx="5" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="820" y="499" text-anchor="middle" fill="#FF9800" font-size="9">Server 6</text>
+
+      <!-- Leaf to Server Links -->
+      <line x1="150" y1="442" x2="110" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="150" y1="442" x2="215" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="310" y1="442" x2="350" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="470" y1="442" x2="460" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="630" y1="442" x2="600" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="630" y1="442" x2="710" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+      <line x1="790" y1="442" x2="820" y2="475" stroke="#30363d" stroke-width="1" opacity="0.6"/>
+
+      <!-- EAST-WEST arrow (big green) -->
+      <line x1="200" y1="490" x2="780" y2="490" stroke="#76b900" stroke-width="3" opacity="0.0"/>
+      <path d="M 110 540 Q 460 575 820 540" fill="none" stroke="#76b900" stroke-width="3" stroke-dasharray="8,4"/>
+      <text x="460" y="585" text-anchor="middle" fill="#76b900" font-size="13" font-weight="bold">East-West: GPU &harr; GPU (AllReduce, P2P) &mdash; 90%+ of traffic</text>
+      <text x="460" y="603" text-anchor="middle" fill="#8b949e" font-size="11">Path: Server &rarr; Leaf &rarr; Spine &rarr; Leaf &rarr; Server (2 hops max)</text>
+
+      <!-- NORTH-SOUTH arrow (red, vertical) -->
+      <line x1="60" y1="100" x2="60" y2="485" stroke="#f44336" stroke-width="3" stroke-dasharray="8,4"/>
+      <text x="55" y="300" text-anchor="end" fill="#f44336" font-size="13" font-weight="bold" transform="rotate(-90,55,300)">North-South: External &harr; DC</text>
+      <text x="960" y="130" text-anchor="end" fill="#8b949e" font-size="10">N-S Path:</text>
+      <text x="960" y="148" text-anchor="end" fill="#8b949e" font-size="10">ISP &rarr; Border Rtr</text>
+      <text x="960" y="166" text-anchor="end" fill="#8b949e" font-size="10">&rarr; Firewall</text>
+      <text x="960" y="184" text-anchor="end" fill="#8b949e" font-size="10">&rarr; Load Balancer</text>
+      <text x="960" y="202" text-anchor="end" fill="#8b949e" font-size="10">&rarr; Spine &rarr; Leaf</text>
+      <text x="960" y="220" text-anchor="end" fill="#8b949e" font-size="10">&rarr; Server</text>
+
+      <!-- Traffic volume comparison -->
+      <rect x="100" y="620" width="800" height="25" rx="4" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <rect x="100" y="620" width="760" height="25" rx="4" fill="#1a3300" opacity="0.4"/>
+      <rect x="860" y="620" width="40" height="25" rx="4" fill="#3a1015" opacity="0.4"/>
+      <text x="480" y="637" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">East-West: ~95%</text>
+      <text x="880" y="637" text-anchor="middle" fill="#f44336" font-size="9">N-S ~5%</text>
+    </svg>
+  </div>
+
+  <div class="info-card">
+    <h4>North-South Infrastructure Components</h4>
+    <ul>
+      <li><strong>Border / Edge Routers:</strong> Terminate BGP sessions with ISPs and transit providers. Typically deployed in redundant pairs (active-active with ECMP or active-standby). Handle route filtering, AS-path prepending, and community tagging. Common hardware: Arista 7280R3, Cisco 8000 series, Juniper MX304.</li>
+      <li><strong>Firewalls:</strong> Stateful packet inspection, ACLs, and DDoS mitigation at the datacenter edge. For GPU clusters, the primary concern is protecting management interfaces (SSH, IPMI/BMC) from external access. Training traffic (InfiniBand) never touches the firewall because it stays on the compute fabric. Typical throughput: 100Gbps+ (Palo Alto PA-7000, Fortinet 4400F).</li>
+      <li><strong>Load Balancers:</strong> Required if the cluster serves inference APIs.
+        <ul>
+          <li><strong>L4 (Transport):</strong> Distributes TCP/UDP connections based on 5-tuple hash. Low overhead, does not inspect payload. Good for distributing inference requests across GPU servers. Examples: NVIDIA BlueField DPU, DPDK-based (Katran/Facebook), IPVS/LVS.</li>
+          <li><strong>L7 (Application):</strong> Inspects HTTP headers, URLs, cookies. Can route based on model name, API version, or request content. Higher overhead. Examples: Envoy, HAProxy, NGINX, AWS ALB equivalent.</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 4. BGP                                                        -->
+  <!-- ============================================================ -->
+  <h3 id="bgp">4. BGP (Border Gateway Protocol)</h3>
+
+  <div class="info-card">
+    <h4>BGP in the Datacenter</h4>
+    <p>BGP (RFC 4271) was originally designed for inter-domain routing on the internet, but has become the <strong>dominant routing protocol for datacenter fabrics</strong>, replacing OSPF and IS-IS in modern deployments. The key insight: treat each switch in the spine-leaf fabric as its own "autonomous system" and run eBGP between them (RFC 7938: "Use of BGP for Routing in Large-Scale Data Centers").</p>
+  </div>
+
+  <div class="tab-group">
+    <div class="tab-buttons">
+      <button class="tab-btn active" data-tab="bgp-external">eBGP (External)</button>
+      <button class="tab-btn" data-tab="bgp-internal">iBGP (Internal)</button>
+      <button class="tab-btn" data-tab="bgp-dc-fabric">BGP as DC IGP (RFC 7938)</button>
+      <button class="tab-btn" data-tab="bgp-evpn">EVPN-VXLAN</button>
+    </div>
+
+    <div class="tab-content active" id="bgp-external">
+      <h4>eBGP for External Peering</h4>
+      <p>Border routers establish eBGP sessions with upstream ISPs, transit providers, and peering partners. Each peer advertises its routes; the border router selects the best path based on BGP's path selection algorithm:</p>
+      <ol>
+        <li>Highest <strong>local preference</strong> (prefer one ISP over another)</li>
+        <li>Shortest <strong>AS path</strong> (fewest autonomous systems traversed)</li>
+        <li>Lowest <strong>origin type</strong> (IGP &lt; EGP &lt; incomplete)</li>
+        <li>Lowest <strong>MED</strong> (Multi-Exit Discriminator, hint from peer)</li>
+        <li>eBGP over iBGP (prefer external routes)</li>
+        <li>Lowest <strong>IGP metric</strong> to next-hop</li>
+        <li>Oldest route (stability preference)</li>
+        <li>Lowest <strong>router ID</strong> (tiebreaker)</li>
+      </ol>
+      <p>Typical configuration: the datacenter's own public ASN (e.g., AS 396356 for NVIDIA), advertising the datacenter's IP prefixes to upstream peers with appropriate communities for traffic engineering.</p>
+    </div>
+
+    <div class="tab-content" id="bgp-internal">
+      <h4>iBGP Within the Datacenter</h4>
+      <p>Traditional iBGP (same ASN on all routers) requires either a <strong>full mesh</strong> of iBGP sessions (N&times;(N-1)/2 sessions) or <strong>route reflectors</strong> to propagate routes. This creates scaling problems:</p>
+      <ul>
+        <li>Full mesh with 128 switches = 8,128 iBGP sessions</li>
+        <li>Route reflectors add complexity and single points of failure</li>
+        <li>iBGP does not modify the AS path, making loop detection harder</li>
+        <li>Next-hop-self configuration required on every device</li>
+      </ul>
+      <p>For these reasons, modern datacenter designs prefer eBGP with private ASNs (see BGP as DC IGP tab) over traditional iBGP.</p>
+    </div>
+
+    <div class="tab-content" id="bgp-dc-fabric">
+      <h4>BGP as an IGP (RFC 7938)</h4>
+      <p>The most common approach in modern datacenter fabrics: assign each switch its own <strong>private ASN</strong> (from the 4-byte range 4200000000-4294967294) and run eBGP on every link.</p>
+      <h5>Design Pattern</h5>
+      <ul>
+        <li>Each leaf switch: unique ASN (e.g., AS 4200000001, 4200000002, ...)</li>
+        <li>Each spine switch: unique ASN (e.g., AS 4200001001, 4200001002, ...)</li>
+        <li>eBGP session on every leaf-spine link (point-to-point /31 or unnumbered)</li>
+        <li>No route reflectors needed (eBGP propagates routes naturally)</li>
+        <li>Loop prevention via AS-path (inherent in eBGP)</li>
+        <li>ECMP across all spine paths (multipath relax with <code>bestpath as-path multipath-relax</code>)</li>
+      </ul>
+      <h5>Advantages Over OSPF/IS-IS</h5>
+      <ul>
+        <li>No complex area design or LSA flooding</li>
+        <li>Policy control at every hop (route-maps, communities)</li>
+        <li>Slower convergence is mitigated by BFD (sub-second detection)</li>
+        <li>Battle-tested at massive scale (every major cloud provider uses this)</li>
+        <li>Simpler troubleshooting: <code>show bgp summary</code> immediately shows peer state</li>
+      </ul>
+      <h5>Unnumbered Interfaces (RFC 5765)</h5>
+      <p>Instead of assigning /31 subnets to every point-to-point link (which consumes IP addresses and creates management overhead), BGP unnumbered uses IPv6 link-local addresses for peering and advertises IPv4 routes with the link-local next-hop. This is supported by FRRouting (FRR) on Cumulus/SONiC and NVIDIA Spectrum switches natively.</p>
+    </div>
+
+    <div class="tab-content" id="bgp-evpn">
+      <h4>EVPN-VXLAN with BGP</h4>
+      <p>When Layer 2 connectivity across racks is needed (e.g., for VM migration, legacy applications, or container networking), <strong>EVPN (Ethernet VPN)</strong> provides an overlay solution using <strong>VXLAN</strong> encapsulation with BGP as the control plane:</p>
+      <ul>
+        <li><strong>VXLAN:</strong> Encapsulates L2 frames in UDP (port 4789) for transport over the L3 spine-leaf fabric. 24-bit VNI (VXLAN Network Identifier) supports ~16 million virtual networks.</li>
+        <li><strong>BGP EVPN (Address Family L2VPN EVPN):</strong> Distributes MAC addresses, IP addresses, and VNI-to-VTEP mappings via BGP rather than flood-and-learn. Eliminates BUM (Broadcast, Unknown unicast, Multicast) flooding.</li>
+        <li><strong>Type-2 routes:</strong> MAC/IP advertisement (host reachability)</li>
+        <li><strong>Type-5 routes:</strong> IP prefix routes (inter-VXLAN routing)</li>
+        <li><strong>Distributed Anycast Gateway:</strong> Every leaf switch acts as the default gateway for its local VNIs using the same virtual MAC and IP. No VRRP/HSRP needed.</li>
+      </ul>
+      <p>In GPU clusters, EVPN-VXLAN is primarily used on the <em>Ethernet management/storage fabric</em>, not on the InfiniBand compute fabric. It provides isolated network segments for BMC/IPMI management, storage traffic, and container networking (e.g., Kubernetes pod networks).</p>
+    </div>
+  </div>
+
+  <div class="info-card">
+    <h4>BFD, Graceful Restart, and Route Dampening</h4>
+    <ul>
+      <li><strong>BFD (Bidirectional Forwarding Detection):</strong> Lightweight protocol running independently of BGP to detect link/node failures in ~50ms (configurable: 3 &times; transmit interval, typically 50ms &times; 3 = 150ms). When BFD detects a failure, it notifies BGP to immediately withdraw routes rather than waiting for the BGP hold timer (default 180 seconds). Essential for sub-second failover in spine-leaf fabrics.</li>
+      <li><strong>Graceful Restart (GR):</strong> Allows a router to maintain forwarding during BGP process restart (e.g., software upgrade). The restarting router signals GR capability; peers maintain stale routes for a configurable period (restart-time, typically 120s). Critical for maintenance without traffic disruption. However, GR conflicts with BFD (BFD detects the restart as a failure), so <strong>Long-Lived Graceful Restart (LLGR)</strong> is sometimes used instead.</li>
+      <li><strong>Route Dampening:</strong> Suppresses routes that flap repeatedly (go up/down/up/down). Assigns a penalty on each flap; when the penalty exceeds a threshold, the route is suppressed until the penalty decays below a reuse threshold. Prevents instability from propagating across the fabric. Typically used on external BGP sessions, not internal DC fabric links.</li>
+      <li><strong>BGP Communities:</strong> 32-bit tags attached to routes for policy signaling. Standard communities (e.g., NO_EXPORT, NO_ADVERTISE), extended communities (for EVPN), and large communities (RFC 8092, 12-byte) for complex traffic engineering. Examples: tag routes from ISP-A for backup-only use, tag internal routes by datacenter region.</li>
+    </ul>
+  </div>
+
+  <!-- BGP Peering Diagram -->
+  <div class="diagram-container">
+    <h4>BGP Peering Architecture: External ISPs + Internal eBGP Fabric</h4>
+    <svg viewBox="0 0 1050 600" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:1050px;" role="img" aria-label="BGP peering diagram showing ISP connections, edge routers, and internal eBGP mesh">
+      <rect width="1050" height="600" fill="#0d1117" rx="8"/>
+      <text x="525" y="28" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">BGP Peering Architecture</text>
+
+      <!-- ISPs -->
+      <rect x="100" y="55" width="140" height="45" rx="8" fill="#1a0d2e" stroke="#9C27B0" stroke-width="2"/>
+      <text x="170" y="75" text-anchor="middle" fill="#CE93D8" font-size="11" font-weight="bold">ISP A (Transit)</text>
+      <text x="170" y="92" text-anchor="middle" fill="#8b949e" font-size="10">AS 3356 (Lumen)</text>
+
+      <rect x="380" y="55" width="140" height="45" rx="8" fill="#1a0d2e" stroke="#9C27B0" stroke-width="2"/>
+      <text x="450" y="75" text-anchor="middle" fill="#CE93D8" font-size="11" font-weight="bold">ISP B (Transit)</text>
+      <text x="450" y="92" text-anchor="middle" fill="#8b949e" font-size="10">AS 1299 (Arelion)</text>
+
+      <rect x="660" y="55" width="140" height="45" rx="8" fill="#0d1a2e" stroke="#2196F3" stroke-width="2"/>
+      <text x="730" y="75" text-anchor="middle" fill="#64B5F6" font-size="11" font-weight="bold">IXP Peering</text>
+      <text x="730" y="92" text-anchor="middle" fill="#8b949e" font-size="10">IX Route Server</text>
+
+      <rect x="870" y="55" width="140" height="45" rx="8" fill="#0d2e1a" stroke="#4CAF50" stroke-width="2"/>
+      <text x="940" y="75" text-anchor="middle" fill="#81C784" font-size="11" font-weight="bold">Cloud Provider</text>
+      <text x="940" y="92" text-anchor="middle" fill="#8b949e" font-size="10">AS 16509 (AWS)</text>
+
+      <!-- eBGP labels -->
+      <text x="170" y="118" text-anchor="middle" fill="#f44336" font-size="9" font-weight="bold">eBGP</text>
+      <text x="450" y="118" text-anchor="middle" fill="#f44336" font-size="9" font-weight="bold">eBGP</text>
+      <text x="730" y="118" text-anchor="middle" fill="#f44336" font-size="9" font-weight="bold">eBGP</text>
+      <text x="940" y="118" text-anchor="middle" fill="#f44336" font-size="9" font-weight="bold">eBGP</text>
+
+      <!-- Lines from ISPs to Border Routers -->
+      <line x1="170" y1="100" x2="320" y2="155" stroke="#f44336" stroke-width="2"/>
+      <line x1="170" y1="100" x2="580" y2="155" stroke="#f44336" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+      <line x1="450" y1="100" x2="320" y2="155" stroke="#f44336" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+      <line x1="450" y1="100" x2="580" y2="155" stroke="#f44336" stroke-width="2"/>
+      <line x1="730" y1="100" x2="580" y2="155" stroke="#2196F3" stroke-width="1.5"/>
+      <line x1="940" y1="100" x2="580" y2="155" stroke="#4CAF50" stroke-width="1.5"/>
+
+      <!-- Border Routers -->
+      <rect x="240" y="145" width="160" height="45" rx="6" fill="#2a1015" stroke="#f44336" stroke-width="2"/>
+      <text x="320" y="165" text-anchor="middle" fill="#f44336" font-size="11" font-weight="bold">Edge Router A</text>
+      <text x="320" y="182" text-anchor="middle" fill="#8b949e" font-size="9">AS 396356 (Own ASN)</text>
+
+      <rect x="500" y="145" width="160" height="45" rx="6" fill="#2a1015" stroke="#f44336" stroke-width="2"/>
+      <text x="580" y="165" text-anchor="middle" fill="#f44336" font-size="11" font-weight="bold">Edge Router B</text>
+      <text x="580" y="182" text-anchor="middle" fill="#8b949e" font-size="9">AS 396356 (Own ASN)</text>
+
+      <!-- iBGP between border routers -->
+      <line x1="400" y1="168" x2="500" y2="168" stroke="#FF9800" stroke-width="1.5" stroke-dasharray="6,3"/>
+      <text x="450" y="160" text-anchor="middle" fill="#FF9800" font-size="8">iBGP</text>
+
+      <!-- Datacenter Internal Fabric box -->
+      <rect x="80" y="225" width="780" height="345" rx="10" fill="none" stroke="#30363d" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="470" y="248" text-anchor="middle" fill="#8b949e" font-size="12">Internal DC Fabric &mdash; eBGP with Private ASNs (RFC 7938)</text>
+
+      <!-- Lines from border routers to spines -->
+      <line x1="320" y1="190" x2="225" y2="275" stroke="#f44336" stroke-width="1.5"/>
+      <line x1="320" y1="190" x2="405" y2="275" stroke="#f44336" stroke-width="1.5"/>
+      <line x1="580" y1="190" x2="585" y2="275" stroke="#f44336" stroke-width="1.5"/>
+      <line x1="580" y1="190" x2="765" y2="275" stroke="#f44336" stroke-width="1.5"/>
+
+      <!-- Spine switches -->
+      <rect x="145" y="270" width="160" height="40" rx="5" fill="#1a2200" stroke="#76b900" stroke-width="1.5"/>
+      <text x="225" y="290" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Spine 0</text>
+      <text x="225" y="303" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200001001</text>
+
+      <rect x="325" y="270" width="160" height="40" rx="5" fill="#1a2200" stroke="#76b900" stroke-width="1.5"/>
+      <text x="405" y="290" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Spine 1</text>
+      <text x="405" y="303" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200001002</text>
+
+      <rect x="505" y="270" width="160" height="40" rx="5" fill="#1a2200" stroke="#76b900" stroke-width="1.5"/>
+      <text x="585" y="290" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Spine 2</text>
+      <text x="585" y="303" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200001003</text>
+
+      <rect x="685" y="270" width="160" height="40" rx="5" fill="#1a2200" stroke="#76b900" stroke-width="1.5"/>
+      <text x="765" y="290" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Spine 3</text>
+      <text x="765" y="303" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200001004</text>
+
+      <!-- eBGP labels between all spine-leaf links -->
+      <text x="470" y="340" text-anchor="middle" fill="#76b900" font-size="9">eBGP on every link (BFD-enabled, unnumbered interfaces)</text>
+
+      <!-- Leaf switches -->
+      <rect x="100" y="365" width="130" height="40" rx="5" fill="#0f1a00" stroke="#76b900" stroke-width="1"/>
+      <text x="165" y="385" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Leaf 0</text>
+      <text x="165" y="398" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200000001</text>
+
+      <rect x="260" y="365" width="130" height="40" rx="5" fill="#0f1a00" stroke="#76b900" stroke-width="1"/>
+      <text x="325" y="385" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Leaf 1</text>
+      <text x="325" y="398" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200000002</text>
+
+      <rect x="420" y="365" width="130" height="40" rx="5" fill="#0f1a00" stroke="#76b900" stroke-width="1"/>
+      <text x="485" y="385" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Leaf 2</text>
+      <text x="485" y="398" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200000003</text>
+
+      <rect x="580" y="365" width="130" height="40" rx="5" fill="#0f1a00" stroke="#76b900" stroke-width="1"/>
+      <text x="645" y="385" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Leaf 3</text>
+      <text x="645" y="398" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200000004</text>
+
+      <rect x="740" y="365" width="130" height="40" rx="5" fill="#0f1a00" stroke="#76b900" stroke-width="1"/>
+      <text x="805" y="385" text-anchor="middle" fill="#76b900" font-size="10" font-weight="bold">Leaf 4</text>
+      <text x="805" y="398" text-anchor="middle" fill="#8b949e" font-size="8">AS 4200000005</text>
+
+      <!-- Spine to Leaf links -->
+      <line x1="225" y1="310" x2="165" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="225" y1="310" x2="325" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="225" y1="310" x2="485" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="225" y1="310" x2="645" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="225" y1="310" x2="805" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="405" y1="310" x2="165" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="405" y1="310" x2="325" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="405" y1="310" x2="485" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="405" y1="310" x2="645" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="405" y1="310" x2="805" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="585" y1="310" x2="165" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="585" y1="310" x2="325" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="585" y1="310" x2="485" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="585" y1="310" x2="645" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="585" y1="310" x2="805" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="765" y1="310" x2="165" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="765" y1="310" x2="325" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="765" y1="310" x2="485" y2="365" stroke="#76b900" stroke-width="1" opacity="0.3"/>
+      <line x1="765" y1="310" x2="645" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+      <line x1="765" y1="310" x2="805" y2="365" stroke="#76b900" stroke-width="1" opacity="0.4"/>
+
+      <!-- Server row -->
+      <rect x="110" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="138" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="175" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="203" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="270" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="298" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="340" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="368" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="430" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="458" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="500" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="528" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="600" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="628" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="670" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="698" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="750" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="778" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+      <rect x="820" y="430" width="55" height="30" rx="4" fill="#2a1800" stroke="#FF9800" stroke-width="1"/>
+      <text x="848" y="449" text-anchor="middle" fill="#FF9800" font-size="8">DGX</text>
+
+      <!-- Leaf to server links -->
+      <line x1="165" y1="405" x2="138" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="165" y1="405" x2="203" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="325" y1="405" x2="298" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="325" y1="405" x2="368" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="485" y1="405" x2="458" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="485" y1="405" x2="528" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="645" y1="405" x2="628" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="645" y1="405" x2="698" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="805" y1="405" x2="778" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+      <line x1="805" y1="405" x2="848" y2="430" stroke="#30363d" stroke-width="1" opacity="0.5"/>
+
+      <!-- Annotations -->
+      <rect x="100" y="480" width="760" height="85" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+      <text x="480" y="500" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="bold">Key BGP Design Points</text>
+      <text x="120" y="520" fill="#adbac7" font-size="10">&#8226; Each switch has its own private ASN from 4-byte range</text>
+      <text x="120" y="537" fill="#adbac7" font-size="10">&#8226; eBGP multipath with "bestpath as-path multipath-relax" for ECMP across different ASNs</text>
+      <text x="120" y="554" fill="#adbac7" font-size="10">&#8226; BFD (50ms intervals) on every link for sub-second failover. Unnumbered interfaces (IPv6 LL) to reduce IP management.</text>
+    </svg>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 5. BLENDED ISP / TRANSIT                                     -->
+  <!-- ============================================================ -->
+  <h3 id="blended-isp-transit">5. Blended ISP / Transit</h3>
+
+  <div class="info-card">
+    <h4>What Is Blended Transit?</h4>
+    <p>Blended transit means connecting the datacenter to <strong>multiple upstream ISPs and transit providers</strong> simultaneously to achieve redundancy, performance, and cost optimization. Rather than relying on a single provider, traffic is distributed across multiple paths based on BGP routing policy.</p>
+  </div>
+
+  <div class="spec-table">
+    <h4>Transit vs Peering vs IXP</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Definition</th>
+          <th>Cost Model</th>
+          <th>Typical Use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Transit</strong></td>
+          <td>Paying an upstream provider to carry your traffic to the entire internet. They advertise your prefixes to their peers and provide you with a full routing table (~950K IPv4 routes as of 2025).</td>
+          <td>Per-Mbps commit + 95th percentile overage. $0.30-$2.00/Mbps/month depending on volume and location.</td>
+          <td>Primary internet access. Every datacenter needs at least one transit provider (usually two for redundancy).</td>
+        </tr>
+        <tr>
+          <td><strong>Peering (PNI)</strong></td>
+          <td>Direct private interconnection with another network (e.g., a cloud provider or CDN). Settlement-free (no payment) or paid. Each party only advertises its own routes.</td>
+          <td>Often free (settlement-free). Cross-connect fee: $200-500/month. Paid peering: negotiated rate.</td>
+          <td>High-volume traffic exchange with specific networks. Reduces transit costs and latency. E.g., peering with AWS for model checkpoint uploads.</td>
+        </tr>
+        <tr>
+          <td><strong>IXP (Internet Exchange)</strong></td>
+          <td>A shared switching fabric (usually Ethernet) where multiple networks peer with each other. Route servers simplify multilateral peering.</td>
+          <td>Port fee: $500-$5,000/month for 10G-100G. No per-Mbps charge. Each peer relationship is settlement-free.</td>
+          <td>Peer with many networks simultaneously. Major IXPs: DE-CIX, AMS-IX, LINX, Equinix IX. Reduces transit usage significantly.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info-card">
+    <h4>Multi-Homed Active-Active Setup</h4>
+    <p>A properly multi-homed datacenter has:</p>
+    <ul>
+      <li><strong>At least 2 transit providers</strong> with physically diverse paths (different fiber routes, different buildings for upstream POPs)</li>
+      <li><strong>Own ASN and Provider-Independent (PI) IP space</strong> (at minimum a /24 IPv4 and /48 IPv6 from an RIR allocation)</li>
+      <li><strong>Active-active traffic engineering:</strong> Both ISPs carry traffic simultaneously. BGP local-preference determines outbound ISP selection; AS-path prepending and MED influence inbound traffic from the internet.</li>
+      <li><strong>Automatic failover:</strong> If one ISP fails, BFD detects the link down in &lt;200ms, BGP withdraws routes via that ISP, and all traffic shifts to the remaining provider within 1-5 seconds.</li>
+    </ul>
+
+    <h5>Anycast for Global Services</h5>
+    <p>If inference endpoints are served from multiple datacenter locations, <strong>anycast</strong> allows the same IP address to be advertised via BGP from multiple sites. Users are routed to the nearest datacenter based on BGP path selection, providing automatic geographic load balancing and failover.</p>
+
+    <h5>DDoS Scrubbing</h5>
+    <p>GPU clusters serving public inference APIs are targets for volumetric DDoS attacks. Solutions include:</p>
+    <ul>
+      <li><strong>Upstream scrubbing:</strong> Providers like Cloudflare, Akamai Prolexic, or AWS Shield proxy traffic and filter attacks before they reach the datacenter. Traffic is routed through the scrubbing center via BGP (either always-on or on-demand via BGP community signaling).</li>
+      <li><strong>On-premise mitigation:</strong> Dedicated DDoS appliances (Arbor/Netscout, A10 Thunder TPS) at the datacenter edge for lower-latency filtering.</li>
+      <li><strong>Flowspec:</strong> BGP Flowspec (RFC 5575) allows border routers to install packet-level filtering rules distributed via BGP, enabling upstream providers to filter attack traffic at their edge.</li>
+    </ul>
+  </div>
+
+  <div class="spec-table">
+    <h4>Typical ISP Uplink Sizing for GPU Datacenters</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>Cluster Size</th>
+          <th>ISP Bandwidth</th>
+          <th>Billing Model</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>64-256 GPUs (single pod)</td>
+          <td>2 &times; 10 GbE per ISP (2 ISPs)</td>
+          <td>95th percentile, 1-5 Gbps commit</td>
+          <td>Sufficient for dataset ingestion + management. Training traffic stays on IB fabric.</td>
+        </tr>
+        <tr>
+          <td>512-2048 GPUs (SuperPOD)</td>
+          <td>2 &times; 100 GbE per ISP (2 ISPs)</td>
+          <td>95th percentile, 10-40 Gbps commit</td>
+          <td>Higher bandwidth needed for checkpoint upload to cloud storage and multi-site training sync.</td>
+        </tr>
+        <tr>
+          <td>4096+ GPUs (multi-site)</td>
+          <td>4 &times; 100 GbE per ISP + IXP peering</td>
+          <td>Blended commit 50-100+ Gbps</td>
+          <td>May include dedicated wavelength (DWDM) links between sites for inter-cluster gradient sync.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout callout-info">
+    <h4>95th Percentile Billing</h4>
+    <p>Most transit providers bill based on the 95th percentile of traffic measured in 5-minute samples over a month. The top 5% of samples are discarded (allows for short bursts). The remaining highest sample determines the bill. For a GPU cluster, large dataset downloads create temporary spikes, but steady-state north-south traffic is typically low. The commit rate is the minimum guaranteed bandwidth and minimum monthly charge. Overages above the commit are billed per-Mbps at a negotiated rate.</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 6. REDUNDANCY & HIGH AVAILABILITY                            -->
+  <!-- ============================================================ -->
+  <h3 id="redundancy-ha">6. Redundancy &amp; High Availability</h3>
+
+  <div class="info-card">
+    <h4>Link Redundancy: MLAG / VPC</h4>
+    <p><strong>MLAG (Multi-Chassis Link Aggregation Group)</strong>, also called VPC (Virtual Port Channel) on Cisco or MC-LAG, allows two physical switches to appear as a single logical switch to downstream devices. This is used on the Ethernet fabric (not InfiniBand, which uses its own redundancy mechanisms).</p>
+
+    <h5>MLAG Components</h5>
+    <ul>
+      <li><strong>Peer Link:</strong> A high-bandwidth link (typically 2-4 &times; 100GbE LAG) between the two MLAG peer switches. Carries orphan traffic (traffic destined for a host connected to only one peer) and control-plane synchronization. This is not the primary data path &mdash; in a well-designed MLAG, the peer link carries minimal data traffic.</li>
+      <li><strong>Keepalive Link:</strong> A low-bandwidth out-of-band link (1GbE management port) used solely for heartbeat detection between peers. If the keepalive is lost but the peer link is up, the secondary switch disables its MLAG ports to prevent split-brain.</li>
+      <li><strong>Orphan Ports:</strong> Server ports connected to only one of the two MLAG peers (not dual-homed). Traffic to/from orphan ports must traverse the peer link to reach the other peer's uplinks. Minimize orphan ports in production designs.</li>
+      <li><strong>Dual-Homed Servers:</strong> Each server's bonded NIC (LACP bond) connects one link to each MLAG peer. From the server's perspective, it has a single LAG to a single switch. If one peer fails, the server's traffic flows entirely through the surviving peer with no reconfiguration.</li>
+    </ul>
+  </div>
+
+  <div class="info-card">
+    <h4>LACP (802.3ad / 802.1AX)</h4>
+    <p>Link Aggregation Control Protocol dynamically negotiates and manages link aggregation groups (LAGs / bonds). Key aspects:</p>
+    <ul>
+      <li><strong>LACP negotiation:</strong> Both endpoints exchange LACPDUs (every 1 second in fast mode, 30 seconds in slow mode) to agree on LAG membership. If a link fails to exchange LACPDUs, it is removed from the LAG.</li>
+      <li><strong>Active vs Passive:</strong> Active mode sends LACPDUs immediately; Passive mode only responds. Best practice: one side Active, one Passive (or both Active).</li>
+      <li><strong>Hash-based distribution:</strong> Outbound traffic is distributed across member links using a hash (typically L3+L4: src/dst IP + src/dst port). This means a single flow uses a single link; aggregate bandwidth is achieved across multiple flows.</li>
+      <li><strong>Min-links:</strong> Configure the minimum number of active links required for the LAG to remain up. If active links drop below this threshold, the entire LAG is brought down, triggering BFD/BGP failover to alternate paths.</li>
+    </ul>
+  </div>
+
+  <div class="spec-table">
+    <h4>Active-Active vs Active-Standby Comparison</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th>Active-Active</th>
+          <th>Active-Standby</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Bandwidth utilization</strong></td>
+          <td>Both links carry traffic simultaneously &mdash; full aggregate bandwidth available</td>
+          <td>Standby link carries no traffic &mdash; 50% bandwidth wasted</td>
+        </tr>
+        <tr>
+          <td><strong>Failover time</strong></td>
+          <td>Sub-second (traffic already flowing on surviving link, just redistributed)</td>
+          <td>1-5 seconds (standby must activate, MAC tables update)</td>
+        </tr>
+        <tr>
+          <td><strong>Complexity</strong></td>
+          <td>Higher: requires ECMP or MLAG, consistent hashing, state sync between peers</td>
+          <td>Lower: clear primary/secondary roles, simpler troubleshooting</td>
+        </tr>
+        <tr>
+          <td><strong>Use in GPU DC</strong></td>
+          <td>Preferred for all fabric links. Spine-leaf inherently active-active via ECMP.</td>
+          <td>Sometimes used for management/OOB networks where simplicity is prioritized.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info-card">
+    <h4>Additional HA Mechanisms</h4>
+    <ul>
+      <li><strong>BFD (Bidirectional Forwarding Detection):</strong> As covered in the BGP section, BFD provides sub-second failure detection (50-300ms). It runs independently of routing protocols and notifies BGP/OSPF immediately upon detecting a link failure. Critical for maintaining training job continuity &mdash; a 3-minute BGP hold-timer expiry would cause NCCL timeouts and kill the training job.</li>
+      <li><strong>VRRP/HSRP (Gateway Redundancy):</strong> Virtual Router Redundancy Protocol (VRRP, RFC 5798) and Hot Standby Router Protocol (HSRP, Cisco proprietary) provide a virtual IP that floats between two routers. One is active (responds to ARP), one is standby. Less common in modern spine-leaf designs because <strong>anycast gateway</strong> (via EVPN) is preferred &mdash; every leaf advertises the same gateway IP with the same virtual MAC, so there is no single active router.</li>
+      <li><strong>Redundant Control Planes:</strong> High-end switches (Cisco Nexus 9000, Arista 7500R) have dual supervisor modules. If the active supervisor fails, the standby takes over with stateful switchover (SSO) &mdash; forwarding continues uninterrupted during the transition. On InfiniBand, the Subnet Manager (OpenSM or NVIDIA UFM) runs on redundant management nodes in active-standby configuration.</li>
+      <li><strong>Anycast Gateway (Distributed Gateway):</strong> In an EVPN-VXLAN fabric, every leaf switch is configured with the same virtual gateway IP and MAC for each VLAN/VNI. Hosts always reach their gateway locally on their own leaf switch &mdash; no hairpinning to a centralized gateway. If a leaf fails, hosts on surviving leaves are unaffected. This replaces VRRP/HSRP entirely.</li>
+    </ul>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 7. ROUTING PROTOCOLS INSIDE THE DC                           -->
+  <!-- ============================================================ -->
+  <h3 id="routing-protocols">7. Routing Protocols Inside the DC</h3>
+
+  <div class="tab-group">
+    <div class="tab-buttons">
+      <button class="tab-btn active" data-tab="rp-ospf">OSPF</button>
+      <button class="tab-btn" data-tab="rp-bgp">BGP (Dominant)</button>
+      <button class="tab-btn" data-tab="rp-comparison">BGP vs OSPF Comparison</button>
+    </div>
+
+    <div class="tab-content active" id="rp-ospf">
+      <h4>OSPF in the Datacenter</h4>
+      <p>OSPF (Open Shortest Path First, RFC 2328 for OSPFv2, RFC 5340 for OSPFv3) is a link-state protocol. Each router builds a complete topology map (Link-State Database / LSDB) and runs Dijkstra's SPF algorithm to compute shortest paths.</p>
+
+      <h5>OSPF Area Design for DC</h5>
+      <ul>
+        <li><strong>Area 0 (Backbone):</strong> Spine switches and inter-area links</li>
+        <li><strong>Non-backbone areas:</strong> Each pod or rack group in its own area to limit LSA flooding</li>
+        <li><strong>Stub / NSSA areas:</strong> Reduce routing table size on leaf switches by summarizing external routes</li>
+      </ul>
+
+      <h5>LSA Types</h5>
+      <ul>
+        <li><strong>Type 1 (Router LSA):</strong> Every router advertises its links and costs within an area</li>
+        <li><strong>Type 2 (Network LSA):</strong> DR (Designated Router) on multi-access segments advertises attached routers. Unnecessary on point-to-point links (use <code>ip ospf network point-to-point</code> to suppress DR election).</li>
+        <li><strong>Type 3 (Summary LSA):</strong> ABR (Area Border Router) advertises inter-area routes. Spine switches acting as ABRs summarize leaf subnets.</li>
+        <li><strong>Type 5 (External LSA):</strong> ASBR (Autonomous System Border Router) redistributes external routes into OSPF.</li>
+      </ul>
+
+      <h5>OSPF Limitations in Large DC Fabrics</h5>
+      <ul>
+        <li>SPF recalculation on every topology change floods the entire area</li>
+        <li>No policy control at individual router level (OSPF is a shortest-path algorithm; you cannot prefer one path for specific prefixes without hacks)</li>
+        <li>DR election on broadcast segments adds complexity (mitigated by point-to-point links)</li>
+        <li>Full LSDB replication in large areas consumes memory and CPU</li>
+        <li>ECMP limited by SPF cost calculation (all equal-cost paths must have identical metric)</li>
+      </ul>
+    </div>
+
+    <div class="tab-content" id="rp-bgp">
+      <h4>BGP as the DC Routing Protocol</h4>
+      <p>As detailed in Section 4, BGP with private ASNs per switch (RFC 7938) has become the dominant routing protocol in large-scale datacenter fabrics. Key operational advantages:</p>
+
+      <h5>Unnumbered Interfaces</h5>
+      <p>BGP unnumbered (supported in FRRouting/Cumulus/SONiC) establishes BGP sessions over IPv6 link-local addresses while carrying IPv4 NLRI. Benefits:</p>
+      <ul>
+        <li>No /31 subnets to allocate, manage, or document for inter-switch links</li>
+        <li>Each switch needs only a single loopback IPv4 address (used as router-id and next-hop)</li>
+        <li>Dramatically simplifies IP address management in fabrics with hundreds of switches</li>
+        <li>Configuration is identical on every leaf-spine link, enabling zero-touch provisioning</li>
+      </ul>
+
+      <h5>Route Summarization at Spine</h5>
+      <p>Spine switches can summarize routes from their connected leaves before advertising to other spines or super-spines. For example, if Leaf 0-7 (a pod) uses 10.0.0.0/24 through 10.0.7.0/24, the spine advertises a single 10.0.0.0/21 aggregate. This reduces the routing table size on super-spines and border routers, improving convergence time and reducing memory consumption.</p>
+
+      <h5>BGP Configuration Example (FRRouting / SONiC)</h5>
+      <pre><code>router bgp 4200000001   ! Leaf-0 ASN
+ bgp router-id 10.255.0.1
+ bgp bestpath as-path multipath-relax
+ neighbor fabric peer-group
+ neighbor fabric remote-as external
+ neighbor fabric bfd
+ neighbor swp1 interface peer-group fabric   ! Uplink to Spine-0
+ neighbor swp2 interface peer-group fabric   ! Uplink to Spine-1
+ neighbor swp3 interface peer-group fabric   ! Uplink to Spine-2
+ neighbor swp4 interface peer-group fabric   ! Uplink to Spine-3
+ !
+ address-family ipv4 unicast
+  network 10.0.0.0/24   ! Server subnet on this leaf
+  maximum-paths 64       ! Enable ECMP across all spine paths
+ exit-address-family</code></pre>
+    </div>
+
+    <div class="tab-content" id="rp-comparison">
+      <h4>BGP vs OSPF for Datacenter Fabrics</h4>
+      <div class="spec-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Criterion</th>
+              <th>OSPF</th>
+              <th>BGP (eBGP w/ private ASN)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Convergence speed</strong></td>
+              <td>Fast SPF recalculation (~ms), but LSA flooding can cause churn in large areas</td>
+              <td>Slower inherent convergence (best-path recalculation), but BFD provides equivalent failure detection speed</td>
+            </tr>
+            <tr>
+              <td><strong>Scalability</strong></td>
+              <td>Requires careful area design. Single area limited to ~200-300 routers before LSDB becomes problematic.</td>
+              <td>Scales to thousands of switches. No area design needed. Each switch is its own AS.</td>
+            </tr>
+            <tr>
+              <td><strong>Policy control</strong></td>
+              <td>Minimal. Can only manipulate link cost. No per-prefix policy at individual routers.</td>
+              <td>Rich policy: route-maps, prefix-lists, communities on every session. Can filter, prefer, or reject any prefix at any hop.</td>
+            </tr>
+            <tr>
+              <td><strong>Multi-path</strong></td>
+              <td>ECMP across equal-cost SPF paths. Maximum paths typically 8-64.</td>
+              <td>ECMP with <code>multipath-relax</code> across different ASNs. Maximum paths 64-256. More flexible.</td>
+            </tr>
+            <tr>
+              <td><strong>Configuration complexity</strong></td>
+              <td>Moderate. Area assignment, network statements, DR tuning on broadcast segments.</td>
+              <td>Low with unnumbered interfaces and peer-groups. Identical config on every leaf. Automation-friendly.</td>
+            </tr>
+            <tr>
+              <td><strong>Troubleshooting</strong></td>
+              <td>Requires understanding LSDB, LSA types, SPF tree. <code>show ip ospf database</code> output is verbose.</td>
+              <td>Straightforward. <code>show bgp summary</code> shows peer state at a glance. <code>show bgp</code> shows selected paths.</td>
+            </tr>
+            <tr>
+              <td><strong>Industry adoption</strong></td>
+              <td>Legacy DC deployments, some enterprise DCs</td>
+              <td>All hyperscalers (Meta, Google, Microsoft, AWS), NVIDIA DGX Cloud, most modern DC fabrics</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout callout-info">
+        <h4>Bottom Line</h4>
+        <p>For GPU cluster datacenter fabrics, <strong>BGP with private ASNs</strong> is the clear winner. It provides the scalability needed for large fabrics, the policy control needed for traffic engineering, and the operational simplicity that comes from uniform configuration across all switches. OSPF remains viable for smaller deployments (&lt;50 switches) where the simpler conceptual model may be preferred, but offers no advantage at scale.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- QUIZ                                                          -->
+  <!-- ============================================================ -->
+  <div class="quiz-container" id="network-quiz">
+    <h3>Knowledge Check: Network Architecture</h3>
+
+    <div class="quiz-question" data-question="1">
+      <h4>Question 1: In a rail-optimized topology for a DGX H100 cluster with 8 GPUs per node, how are the GPU NICs connected to the leaf switches?</h4>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="net-q1" value="a">
+          <span>All 8 GPU NICs in each server connect to the same leaf switch (ToR), with different leaf switches serving different racks.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q1" value="b">
+          <span>Each GPU NIC connects to a dedicated "rail" leaf switch, so GPU 0 across all servers connects to Rail 0 leaf switches, GPU 1 to Rail 1, and so on. This aligns the physical topology with NCCL ring/tree collective patterns.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q1" value="c">
+          <span>GPU NICs are connected directly to spine switches to minimize latency, bypassing the leaf tier entirely.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q1" value="d">
+          <span>The 8 GPU NICs are bonded into a single LACP LAG connected to one leaf switch for maximum aggregate bandwidth.</span>
+        </label>
+      </div>
+      <div class="quiz-feedback" data-correct="b">
+        <p class="correct-feedback"><strong>Correct.</strong> Rail-optimized topology assigns each GPU index to a separate "rail" (set of leaf switches). GPU 0 on every server in the pod connects to Rail 0 leaf switches, GPU 1 to Rail 1, etc. This means intra-rail AllReduce traffic (GPU N on Server A talking to GPU N on Server B) stays within a single rail's leaf-spine sub-fabric. Cross-GPU communication within a node uses NVSwitch/NVLink (900 GB/s on H100), not the network fabric. This design dramatically reduces cross-rail traffic and simplifies ECMP load balancing.</p>
+        <p class="incorrect-feedback"><strong>Incorrect.</strong> In a rail-optimized design, each of the 8 GPUs in a DGX node connects its NIC to a different leaf switch rail. GPU 0 across all servers connects to Rail 0 leaves, GPU 1 to Rail 1 leaves, etc. This aligns the network topology with NCCL's collective algorithms, keeping most AllReduce traffic within a single rail and using intra-node NVLink for cross-GPU communication.</p>
+      </div>
+    </div>
+
+    <div class="quiz-question" data-question="2">
+      <h4>Question 2: Why does RFC 7938 recommend using eBGP with private ASNs (one per switch) instead of OSPF or iBGP for datacenter spine-leaf fabrics?</h4>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="net-q2" value="a">
+          <span>eBGP converges faster than OSPF, so link failures are detected more quickly without BFD.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q2" value="b">
+          <span>eBGP per-switch ASN eliminates the need for OSPF area design, avoids iBGP full-mesh/route-reflector complexity, provides inherent loop prevention via AS-path, and enables rich per-hop policy control. ECMP works across different ASNs with "multipath-relax."</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q2" value="c">
+          <span>eBGP is required for EVPN-VXLAN, while OSPF cannot be used as an underlay for overlay networks.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q2" value="d">
+          <span>eBGP uses less CPU and memory than OSPF because it does not maintain a link-state database.</span>
+        </label>
+      </div>
+      <div class="quiz-feedback" data-correct="b">
+        <p class="correct-feedback"><strong>Correct.</strong> The key advantages of eBGP with per-switch ASNs are: (1) no OSPF area design needed since each switch is its own AS, (2) no iBGP full-mesh or route reflectors since eBGP naturally propagates routes, (3) AS-path provides loop prevention, and (4) route-maps and communities enable per-hop policy control. The "bestpath as-path multipath-relax" knob enables ECMP even when paths traverse different ASNs. BFD is used alongside BGP to achieve sub-second failure detection, compensating for BGP's inherently slower convergence.</p>
+        <p class="incorrect-feedback"><strong>Incorrect.</strong> eBGP actually converges slower than OSPF by default (answer A is wrong). OSPF can be used as a VXLAN underlay (answer C is wrong). BGP does maintain per-prefix state (answer D is misleading). The correct answer is B: the combination of no area design, no full-mesh requirement, AS-path loop prevention, and rich policy control makes eBGP with private ASNs the simplest and most scalable approach for large datacenter fabrics.</p>
+      </div>
+    </div>
+
+    <div class="quiz-question" data-question="3">
+      <h4>Question 3: What is the "elephant flow" problem with ECMP in GPU training clusters, and how does NVIDIA's InfiniBand Quantum-2 address it?</h4>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="net-q3" value="a">
+          <span>Elephant flows are flows that exceed the MTU size and must be fragmented. Quantum-2 supports jumbo frames up to 9,216 bytes to eliminate fragmentation.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q3" value="b">
+          <span>Elephant flows are short-lived bursts that overwhelm switch buffers. Quantum-2 uses deep buffers (up to 128 MB per port) to absorb bursts.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q3" value="c">
+          <span>Elephant flows are large, long-lived flows from NCCL collectives. ECMP's 5-tuple hashing can map multiple elephant flows to the same spine link (hash collision), causing congestion on that path while other paths are underutilized. Quantum-2's adaptive routing dynamically reroutes individual packets based on real-time port congestion, achieving near-perfect load balancing without hash collisions.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-q3" value="d">
+          <span>Elephant flows are multicast traffic from NCCL broadcasts. Quantum-2 uses hardware multicast trees to eliminate the need for ECMP on broadcast traffic.</span>
+        </label>
+      </div>
+      <div class="quiz-feedback" data-correct="c">
+        <p class="correct-feedback"><strong>Correct.</strong> NCCL generates a small number of very large, persistent flows during collective operations like AllReduce. With standard ECMP 5-tuple hashing, the birthday problem makes hash collisions likely even with moderate flow counts: with 32 spine paths and 8 flows, there is approximately a 75% chance of at least one collision. A collision means two elephant flows share one spine link (creating congestion) while another spine link sits idle. NVIDIA Quantum-2 switches implement adaptive routing at the hardware level, inspecting real-time port utilization and dynamically selecting the least-congested path for each packet. This per-packet decision eliminates hash collision hotspots and achieves near-theoretical bisection bandwidth.</p>
+        <p class="incorrect-feedback"><strong>Incorrect.</strong> Elephant flows are not about MTU/fragmentation (A) or short bursts (B) or multicast (D). They are large, long-lived data flows from NCCL collectives that persist for the duration of gradient synchronization. The problem is that ECMP's static 5-tuple hash can map multiple such flows to the same spine link, creating a hotspot. Quantum-2's adaptive routing solves this by making per-packet routing decisions based on real-time congestion, not static hashing.</p>
+      </div>
+    </div>
+  </div>
+
+</section>

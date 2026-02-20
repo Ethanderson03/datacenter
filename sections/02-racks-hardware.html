@@ -1,0 +1,1356 @@
+<section id="racks-hardware" class="content-section" data-layer="1">
+
+  <!-- =========================================================
+       SECTION HEADER
+       ========================================================= -->
+  <div class="section-header">
+    <h1>Racks &amp; Hardware</h1>
+    <p class="section-subtitle">From 42U steel to 700-watt GPUs &mdash; the physical foundation of AI supercomputing infrastructure.</p>
+  </div>
+
+  <!-- =========================================================
+       1. IT RACK STANDARDS
+       ========================================================= -->
+  <div class="subsection" id="rack-standards">
+    <h2>1. IT Rack Standards</h2>
+
+    <div class="info-card">
+      <h3>The 42U Rack &mdash; EIA-310-E</h3>
+      <p>
+        Nearly every piece of datacenter equipment is designed around the <strong>EIA-310-E</strong> standard
+        (also referenced as IEC 60297 and DIN 41494). One rack unit (<strong>1U</strong>) equals
+        <strong>44.45&nbsp;mm (1.75&nbsp;in)</strong> of vertical mounting space. A standard full-height cabinet
+        provides <strong>42U</strong> of usable space &mdash; roughly 1,867&nbsp;mm (73.5&nbsp;in) of mounting
+        height inside an overall cabinet that stands approximately 2,000&ndash;2,100&nbsp;mm tall including
+        casters and roof panels.
+      </p>
+      <p>
+        The 19-inch (482.6&nbsp;mm) mounting width between the inner edges of the front vertical rails is the
+        universal constant. Equipment faceplates are designed to span exactly this opening, secured with screws
+        or tool-less clips into the rail holes.
+      </p>
+    </div>
+
+    <div class="info-card">
+      <h3>Rack Dimensions &amp; Form Factors</h3>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Standard Option</th>
+            <th>Wide/Deep Option</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>External Width</td>
+            <td>600&nbsp;mm (23.6&Prime;)</td>
+            <td>800&nbsp;mm (31.5&Prime;)</td>
+            <td>800&nbsp;mm needed for high-density cabling or side-mount PDUs</td>
+          </tr>
+          <tr>
+            <td>External Depth</td>
+            <td>1,000&nbsp;mm (39.4&Prime;)</td>
+            <td>1,200&nbsp;mm (47.2&Prime;)</td>
+            <td>GPU servers (e.g., DGX H100 at ~900&nbsp;mm depth) typically require 1,200&nbsp;mm</td>
+          </tr>
+          <tr>
+            <td>Height (with casters)</td>
+            <td colspan="2">2,000&ndash;2,100&nbsp;mm (42U usable)</td>
+            <td>Some facilities use 48U or 52U tall racks</td>
+          </tr>
+          <tr>
+            <td>Mounting Width</td>
+            <td colspan="2">482.6&nbsp;mm (19&Prime;) between rails</td>
+            <td>EIA-310-E universal standard</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h3>Open Frame vs. Enclosed Cabinet</h3>
+      <div class="two-column">
+        <div class="column">
+          <h4>Open Frame (2-Post / 4-Post)</h4>
+          <ul>
+            <li>No side panels, doors, or roof &mdash; maximum airflow</li>
+            <li>Lower cost, lighter weight, easier cable access</li>
+            <li>Used in private, access-controlled datacenter rooms</li>
+            <li>2-post for lightweight network and patch panels; 4-post for servers</li>
+            <li>Cannot form hot/cold aisle containment without additional accessories</li>
+          </ul>
+        </div>
+        <div class="column">
+          <h4>Enclosed Cabinet</h4>
+          <ul>
+            <li>Locking front and rear doors, removable side panels</li>
+            <li>Perforated doors (typically 64&ndash;80% perforation) for front-to-back airflow</li>
+            <li>Required for hot-aisle/cold-aisle containment strategies</li>
+            <li>Physical security for colocation environments</li>
+            <li>Acoustic dampening in some models (noise reduction for edge deployments)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Cable Management &amp; Airflow Best Practices</button>
+      <div class="expandable-content">
+        <h4>Vertical Cable Management</h4>
+        <p>
+          Vertical cable managers run along the sides of the rack between the mounting rails and the cabinet
+          walls. They come in single-sided (finger) or double-sided (hinged) designs. For high-density GPU
+          racks carrying 8&ndash;16 fiber cables and multiple power cords per server, double-sided vertical
+          managers with at least 6&Prime; (152&nbsp;mm) of cable trough width are recommended. The NVIDIA DGX
+          H100 alone requires 10 rear-panel cable connections (8&times; InfiniBand + 2&times; management
+          Ethernet), making vertical management essential.
+        </p>
+        <h4>Horizontal Cable Management</h4>
+        <p>
+          1U or 2U horizontal cable managers are placed between equipment to organize cables laterally and
+          route them to the vertical managers. In GPU-dense racks, a 1U horizontal manager should be placed
+          above each DGX node to prevent cable congestion from blocking airflow.
+        </p>
+        <h4>Blanking Panels</h4>
+        <p>
+          Every unused rack unit <strong>must</strong> be covered with a blanking panel. Without them, hot
+          exhaust air recirculates from the rear of the rack to the front intake through the empty openings
+          &mdash; a phenomenon called <strong>hot-air bypass</strong>. Studies show that leaving just 4U
+          uncovered in a 42U rack can raise intake temperatures by 5&ndash;10&deg;C, leading to thermal
+          throttling in GPUs. Snap-in tool-less blanking panels allow rapid reconfiguration.
+        </p>
+        <h4>Mounting Hardware</h4>
+        <ul>
+          <li><strong>Cage nuts &amp; screws:</strong> Traditional square-hole mounting. Insert cage nut with
+              a cage-nut tool, then fasten with a M6 screw. Secure but slower to reconfigure.</li>
+          <li><strong>Tool-less (clip-nut / snap-in) rails:</strong> Spring-loaded latches on server rail
+              kits that clip into the rack&rsquo;s square or round holes. Most modern 1U/2U servers ship with
+              tool-less inner rails.</li>
+          <li><strong>Sliding rail kits:</strong> Telescoping rails (ball-bearing or roller) that allow
+              servers to slide forward for maintenance without removing cables. Required for heavy systems
+              like the DGX H100 (approx. 60&nbsp;kg / 132&nbsp;lbs per 8U chassis).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>Weight Capacity</h3>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Rating Type</th>
+            <th>Typical Range</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Static Load</td>
+            <td>1,000&ndash;1,500&nbsp;kg (2,200&ndash;3,300&nbsp;lbs)</td>
+            <td>Maximum weight when rack is stationary and bolted to the floor</td>
+          </tr>
+          <tr>
+            <td>Dynamic / Rolling Load</td>
+            <td>600&ndash;1,000&nbsp;kg (1,320&ndash;2,200&nbsp;lbs)</td>
+            <td>Maximum weight while rack is being moved on casters</td>
+          </tr>
+          <tr>
+            <td>Seismic Rated</td>
+            <td>Varies by zone</td>
+            <td>Certified to withstand specified seismic forces (e.g., Zone 4 / GR-63-CORE NEBS)</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        A fully loaded GPU rack with 4&times; DGX H100 nodes (8U each = 32U), networking switches, PDUs, and
+        cable management can easily weigh <strong>500&ndash;700&nbsp;kg</strong>. Raised-floor tiles beneath
+        GPU racks must also be rated accordingly &mdash; standard floor tiles support ~450&ndash;570&nbsp;kg
+        per tile (concentrated load), so reinforced tiles or structural support are often required.
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       2. NVIDIA DGX / HGX SYSTEMS
+       ========================================================= -->
+  <div class="subsection" id="dgx-hgx-systems">
+    <h2>2. NVIDIA DGX / HGX Systems</h2>
+
+    <div class="info-card">
+      <h3>HGX vs. DGX &mdash; Understanding the Product Line</h3>
+      <p>
+        NVIDIA&rsquo;s AI compute platform is delivered in two tiers:
+      </p>
+      <ul>
+        <li>
+          <strong>HGX</strong> (Hyperscale GPU Accelerator) is a <em>baseboard reference design</em> &mdash; a
+          GPU tray containing the GPU modules, NVSwitch interconnect, and NVLink wiring. NVIDIA sells HGX
+          baseboards to OEM partners (Dell, HPE, Lenovo, Supermicro, etc.) who integrate them into their own
+          server chassis with their own choice of CPUs, memory, storage, and network adapters. This allows
+          customization but requires more integration effort.
+        </li>
+        <li>
+          <strong>DGX</strong> is NVIDIA&rsquo;s <em>fully integrated, turnkey AI system</em>. It includes the
+          HGX baseboard plus NVIDIA-selected CPUs, memory, NVMe storage, ConnectX NICs, BlueField DPUs, the
+          chassis, cooling, firmware, and the DGX OS (based on Ubuntu Linux). DGX systems are sold directly by
+          NVIDIA and through select partners as validated, pre-configured appliances.
+        </li>
+      </ul>
+      <p>
+        Think of HGX as the engine and DGX as the complete car.
+      </p>
+    </div>
+
+    <div class="info-card highlight-card">
+      <h3>DGX H100 &mdash; Full Specifications</h3>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Specification</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>GPUs</td><td>8&times; NVIDIA H100 SXM5, 80&nbsp;GB HBM3 each (<strong>640&nbsp;GB total GPU memory</strong>)</td></tr>
+          <tr><td>GPU Interconnect</td><td>NVLink 4.0 (900&nbsp;GB/s bidirectional per GPU) via 4&times; NVSwitch 3rd gen</td></tr>
+          <tr><td>FP8 Tensor Performance</td><td>~32 PFLOPS aggregate (per node, 8 GPUs with sparsity)</td></tr>
+          <tr><td>CPUs</td><td>2&times; Intel Xeon Platinum 8480C (Sapphire Rapids), 56 cores each, 2.0&nbsp;GHz base / 3.8&nbsp;GHz turbo</td></tr>
+          <tr><td>System Memory</td><td>2&nbsp;TB DDR5-4800 (32&times; 64&nbsp;GB DIMMs)</td></tr>
+          <tr><td>Networking</td><td>8&times; NVIDIA ConnectX-7 400&nbsp;Gb/s InfiniBand / Ethernet (NDR)</td></tr>
+          <tr><td>DPUs</td><td>2&times; NVIDIA BlueField-3 (400&nbsp;Gb/s each, for storage &amp; management networks)</td></tr>
+          <tr><td>Storage</td><td>~30&nbsp;TB NVMe SSD (8&times; 3.84&nbsp;TB NVMe U.2 drives)</td></tr>
+          <tr><td>OS Drive</td><td>2&times; 1.92&nbsp;TB NVMe M.2 (RAID-1 for DGX OS)</td></tr>
+          <tr><td>Power</td><td>10.2&nbsp;kW typical, up to 11.3&nbsp;kW max</td></tr>
+          <tr><td>Power Supply</td><td>Redundant 2+2 PSUs, 3kW each, 200&ndash;240VAC single-phase or high-voltage DC</td></tr>
+          <tr><td>Form Factor</td><td>8U, 19&Prime; rack-mountable, ~900&nbsp;mm deep</td></tr>
+          <tr><td>Weight</td><td>~61&nbsp;kg (134&nbsp;lbs)</td></tr>
+          <tr><td>Operating System</td><td>DGX OS (Ubuntu 22.04-based) with NVIDIA AI Enterprise software stack</td></tr>
+          <tr><td>Management</td><td>BMC (Baseboard Management Controller) with IPMI, Redfish API</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">DGX B200 &amp; GB200 NVL72 &mdash; Next Generation</button>
+      <div class="expandable-content">
+        <h4>DGX B200</h4>
+        <p>
+          The DGX B200 is the direct successor to the DGX H100, built around the NVIDIA Blackwell B200 GPU.
+          Each B200 GPU features <strong>208 billion transistors</strong> on a TSMC 4NP process with a
+          <strong>dual-die</strong> design connected via a 10&nbsp;TB/s chip-to-chip interconnect. Key specs
+          per GPU:
+        </p>
+        <ul>
+          <li>192&nbsp;GB HBM3e memory at 8&nbsp;TB/s bandwidth</li>
+          <li>Up to 9&nbsp;PFLOPS FP4 Tensor performance (with sparsity)</li>
+          <li>NVLink 5.0: 1,800&nbsp;GB/s bidirectional per GPU (2&times; the H100)</li>
+          <li>TDP: 1,000W per GPU</li>
+        </ul>
+        <p>
+          A DGX B200 node with 8&times; B200 GPUs delivers <strong>~72 PFLOPS</strong> of FP4 AI training
+          performance and contains <strong>1.5&nbsp;TB of HBM3e</strong> memory.
+        </p>
+
+        <h4>GB200 NVL72 &mdash; The Rack-Scale GPU</h4>
+        <p>
+          The GB200 NVL72 represents a fundamental shift from node-scale to <strong>rack-scale</strong>
+          computing. A single NVL72 rack contains:
+        </p>
+        <ul>
+          <li><strong>36&times; Grace CPUs</strong> (NVIDIA&rsquo;s Arm Neoverse V2-based processor, 72 cores each)</li>
+          <li><strong>72&times; Blackwell GPUs</strong> arranged as 36 Grace-Blackwell Superchips (each Superchip pairs 1 Grace CPU + 2 Blackwell GPUs via NVLink-C2C at 900&nbsp;GB/s)</li>
+          <li><strong>All 72 GPUs connected via NVLink 5.0</strong> through 9&times; NVSwitch 4th gen chips,
+              forming a single unified memory domain of <strong>~13.5&nbsp;TB HBM3e</strong></li>
+          <li>Liquid-cooled design (mandatory &mdash; ~120&nbsp;kW per rack)</li>
+          <li>~720 PFLOPS FP4 AI performance per rack</li>
+        </ul>
+        <p>
+          The NVL72 is designed for trillion-parameter model training where the entire model&rsquo;s weights
+          can reside in the GPU memory of a single rack, eliminating the need for slower fabric-level
+          communication during many training steps.
+        </p>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>DGX SuperPOD at a Glance</h3>
+      <p>
+        A <strong>DGX SuperPOD</strong> is NVIDIA&rsquo;s reference architecture for scaling DGX nodes into a
+        cluster. For the H100 generation:
+      </p>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>DGX H100 Nodes</td><td>32</td></tr>
+          <tr><td>Total GPUs</td><td>256&times; H100 SXM5</td></tr>
+          <tr><td>Total GPU Memory</td><td>20,480&nbsp;GB (20&nbsp;TB) HBM3</td></tr>
+          <tr><td>Aggregate FP8 Performance</td><td>~1 ExaFLOP (with sparsity)</td></tr>
+          <tr><td>Compute NICs</td><td>256&times; ConnectX-7 400G InfiniBand</td></tr>
+          <tr><td>Storage/Mgmt DPUs</td><td>64&times; BlueField-3</td></tr>
+          <tr><td>InfiniBand Switches</td><td>NVIDIA Quantum-2 QM9700 (leaf &amp; spine)</td></tr>
+          <tr><td>Total Power</td><td>~330&ndash;360&nbsp;kW (compute nodes only)</td></tr>
+          <tr><td>Networking Topology</td><td>Fat-tree (leaf-spine) with full bisection bandwidth</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       3. GPU ARCHITECTURE DEEP DIVE
+       ========================================================= -->
+  <div class="subsection" id="gpu-architecture">
+    <h2>3. GPU Architecture Deep Dive</h2>
+
+    <div class="info-card">
+      <h3>NVIDIA H100 SXM5 &mdash; Architecture Overview</h3>
+      <p>
+        The H100 is based on the <strong>Hopper</strong> microarchitecture (GH100 die). It is fabricated on
+        <strong>TSMC&rsquo;s custom 4N process</strong> (a variant of N4/N5 optimized for NVIDIA) and
+        contains <strong>80 billion transistors</strong> on a die area of <strong>814&nbsp;mm&sup2;</strong>.
+      </p>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Specification</th>
+            <th>H100 SXM5</th>
+            <th>H100 PCIe</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>GPU Architecture</td><td colspan="2">Hopper (GH100)</td></tr>
+          <tr><td>Transistors</td><td colspan="2">80 billion</td></tr>
+          <tr><td>Process Node</td><td colspan="2">TSMC 4N</td></tr>
+          <tr><td>Die Size</td><td colspan="2">814 mm&sup2;</td></tr>
+          <tr><td>Streaming Multiprocessors (SMs)</td><td>132 (of 144 on die)</td><td>114</td></tr>
+          <tr><td>CUDA Cores (FP32)</td><td>16,896</td><td>14,592</td></tr>
+          <tr><td>Tensor Cores (4th gen)</td><td>528</td><td>456</td></tr>
+          <tr><td>Memory</td><td>80 GB HBM3, 5 stacks</td><td>80 GB HBM3, 5 stacks</td></tr>
+          <tr><td>Memory Bandwidth</td><td>3.35 TB/s</td><td>2.0 TB/s</td></tr>
+          <tr><td>Memory Bus Width</td><td>5,120-bit</td><td>5,120-bit</td></tr>
+          <tr><td>L2 Cache</td><td>50 MB</td><td>50 MB</td></tr>
+          <tr><td>NVLink</td><td>4.0 &mdash; 900 GB/s bidi (18 links)</td><td>N/A (PCIe only)</td></tr>
+          <tr><td>PCIe</td><td>Gen5 x16 (128 GB/s bidi)</td><td>Gen5 x16 (128 GB/s bidi)</td></tr>
+          <tr><td>TDP</td><td>700W</td><td>350W</td></tr>
+          <tr><td>FP64</td><td>34 TFLOPS</td><td>26 TFLOPS</td></tr>
+          <tr><td>FP32</td><td>67 TFLOPS</td><td>51 TFLOPS</td></tr>
+          <tr><td>TF32 Tensor</td><td>989 TFLOPS*</td><td>756 TFLOPS*</td></tr>
+          <tr><td>FP16 Tensor</td><td>1,979 TFLOPS*</td><td>1,513 TFLOPS*</td></tr>
+          <tr><td>FP8 Tensor</td><td>3,958 TFLOPS*</td><td>3,026 TFLOPS*</td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td colspan="3">* With sparsity (2:4 structured sparsity). Without sparsity, divide by 2.</td></tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h3>Hopper SM Architecture</h3>
+      <p>
+        Each Hopper Streaming Multiprocessor (SM) contains:
+      </p>
+      <ul>
+        <li><strong>128 FP32 CUDA Cores</strong> (organized as 4 processing blocks of 32 each)</li>
+        <li><strong>4 Fourth-Generation Tensor Cores</strong> &mdash; these are the workhorses for AI
+            training and inference. Each Tensor Core can execute matrix multiply-accumulate operations on
+            FP8, FP16, BF16, TF32, FP64, and INT8 data types.</li>
+        <li><strong>4 Texture Units</strong></li>
+        <li><strong>256 KB Register File</strong> per SM</li>
+        <li><strong>256 KB combined L1 / Shared Memory</strong> (configurable split, up from 192 KB in
+            Ampere A100)</li>
+      </ul>
+      <p>
+        The H100 SXM5 activates 132 of the 144 SMs on the GH100 die (the remaining 12 are disabled for
+        yield improvement). This gives 132 &times; 128 = 16,896 CUDA cores and 132 &times; 4 = 528 Tensor
+        Cores.
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Transformer Engine &amp; FP8</button>
+      <div class="expandable-content">
+        <p>
+          The H100 introduces the <strong>Transformer Engine</strong>, a hardware-software co-design that
+          dynamically switches between FP8 and FP16 precision on a per-tensor, per-layer basis during
+          training. Each Tensor Core can execute FP8 matrix operations (E4M3 or E5M2 formats) at
+          <strong>2&times;</strong> the throughput of FP16, while maintaining model accuracy through
+          automatic scaling factors managed by the engine.
+        </p>
+        <p>
+          The Transformer Engine stores a per-tensor scaling factor (computed from the previous iteration)
+          that maps the dynamic range of FP8 to the actual value distribution of each tensor. This allows
+          gradients and activations with different dynamic ranges to each use the full precision of FP8
+          without overflow or underflow. Layers that are sensitive to precision automatically fall back to
+          FP16 computation.
+        </p>
+        <p>
+          This is why the H100 can achieve <strong>~4 PFLOPS FP8</strong> per GPU (with sparsity) &mdash;
+          double the FP16 rate &mdash; while training GPT-3-class models to the same converged accuracy as
+          FP16 training on the A100.
+        </p>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>NVLink 4.0 &amp; NVSwitch 3rd Generation</h3>
+      <p>
+        <strong>NVLink 4.0</strong> is NVIDIA&rsquo;s proprietary high-bandwidth, low-latency GPU
+        interconnect. Each H100 SXM5 GPU has <strong>18 NVLink 4.0 links</strong>, each running at
+        <strong>25 GB/s per direction (50 GB/s bidirectional)</strong>, for an aggregate of
+        <strong>900 GB/s bidirectional</strong> per GPU.
+      </p>
+      <p>
+        Within a DGX H100 node, the 8 GPUs are connected in an <strong>all-to-all topology</strong> via
+        <strong>4&times; NVSwitch 3rd-generation</strong> ASICs. Each NVSwitch chip has:
+      </p>
+      <ul>
+        <li><strong>64 NVLink 4.0 ports</strong></li>
+        <li><strong>13.6 TB/s</strong> total aggregate switching bandwidth</li>
+        <li><strong>SHARP v3 (Scalable Hierarchical Aggregation and Reduction Protocol):</strong> in-network
+            allreduce and other collective operations executed directly in the switch silicon, reducing
+            collective communication time by up to 2&times;</li>
+      </ul>
+      <p>
+        The 4 NVSwitch chips collectively provide every GPU with a direct, full-bandwidth path to every other
+        GPU in the node. This means GPU 0 can read from GPU 7&rsquo;s HBM3 memory at the full 900 GB/s
+        &mdash; there is no bandwidth reduction regardless of which GPU pair is communicating. This
+        <strong>non-blocking, all-to-all</strong> fabric is critical for large-model tensor parallelism,
+        where layers are split across GPUs and each training step requires all GPUs to exchange activations
+        and gradients.
+      </p>
+    </div>
+
+    <!-- ===================== SVG: DGX H100 NVSwitch Topology ===================== -->
+    <div class="diagram-container">
+      <h3>DGX H100 Internal Architecture &mdash; NVSwitch All-to-All Topology</h3>
+      <svg viewBox="0 0 900 680" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="Diagram showing 8 H100 GPUs connected via 4 NVSwitch chips in an all-to-all topology, with ConnectX-7 NICs and CPUs">
+        <defs>
+          <linearGradient id="gpuGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#4ade80"/>
+            <stop offset="100%" stop-color="#16a34a"/>
+          </linearGradient>
+          <linearGradient id="nvsGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#c084fc"/>
+            <stop offset="100%" stop-color="#7c3aed"/>
+          </linearGradient>
+          <linearGradient id="nicGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#60a5fa"/>
+            <stop offset="100%" stop-color="#2563eb"/>
+          </linearGradient>
+          <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#fb923c"/>
+            <stop offset="100%" stop-color="#ea580c"/>
+          </linearGradient>
+          <filter id="shadow1">
+            <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.2"/>
+          </filter>
+        </defs>
+
+        <!-- Background -->
+        <rect x="0" y="0" width="900" height="680" rx="12" fill="#0f172a"/>
+        <text x="450" y="32" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="monospace">DGX H100 Node &mdash; Internal Interconnect Architecture</text>
+
+        <!-- ===== CPUs (top) ===== -->
+        <rect x="170" y="46" width="160" height="46" rx="6" fill="url(#cpuGrad)" filter="url(#shadow1)"/>
+        <text x="250" y="66" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">CPU 0</text>
+        <text x="250" y="82" text-anchor="middle" fill="#fff3" font-size="8" font-family="monospace">Xeon 8480C &bull; 56c</text>
+
+        <rect x="570" y="46" width="160" height="46" rx="6" fill="url(#cpuGrad)" filter="url(#shadow1)"/>
+        <text x="650" y="66" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">CPU 1</text>
+        <text x="650" y="82" text-anchor="middle" fill="#fff3" font-size="8" font-family="monospace">Xeon 8480C &bull; 56c</text>
+
+        <!-- PCIe label -->
+        <text x="450" y="110" text-anchor="middle" fill="#64748b" font-size="9" font-family="monospace">PCIe Gen5 x16 (128 GB/s each)</text>
+        <!-- PCIe lines CPU0 to GPU 0-3 -->
+        <line x1="210" y1="92" x2="113" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <line x1="230" y1="92" x2="233" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <line x1="260" y1="92" x2="353" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <line x1="290" y1="92" x2="473" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <!-- PCIe lines CPU1 to GPU 4-7 -->
+        <line x1="610" y1="92" x2="473" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.3"/>
+        <line x1="630" y1="92" x2="593" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <line x1="660" y1="92" x2="713" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <line x1="690" y1="92" x2="788" y2="148" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+
+        <!-- ===== 8 GPUs (row) ===== -->
+        <!-- GPU positions: x = 68, 188, 308, 428, 548, 668, 738, 788 => let's space them evenly -->
+        <!-- x centers: 90, 210, 330, 450, 570, 690 ... need 8. Use: 68+i*105 for i=0..7 => 68,173,278,383,488,593,698,803 -->
+        <!-- GPU 0 -->
+        <rect x="48" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="93" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 0</text>
+        <text x="93" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 1 -->
+        <rect x="153" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="198" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 1</text>
+        <text x="198" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 2 -->
+        <rect x="258" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="303" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 2</text>
+        <text x="303" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 3 -->
+        <rect x="363" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="408" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 3</text>
+        <text x="408" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 4 -->
+        <rect x="468" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="513" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 4</text>
+        <text x="513" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 5 -->
+        <rect x="573" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="618" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 5</text>
+        <text x="618" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 6 -->
+        <rect x="678" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="723" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 6</text>
+        <text x="723" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+        <!-- GPU 7 -->
+        <rect x="783" y="148" width="90" height="56" rx="6" fill="url(#gpuGrad)" filter="url(#shadow1)"/>
+        <text x="828" y="172" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="sans-serif">GPU 7</text>
+        <text x="828" y="192" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">H100 80GB</text>
+
+        <!-- ===== NVLink label ===== -->
+        <text x="450" y="228" text-anchor="middle" fill="#a78bfa" font-size="9" font-family="monospace">NVLink 4.0 &mdash; 900 GB/s bidirectional per GPU</text>
+
+        <!-- ===== NVLink connections (GPU to NVSwitch) ===== -->
+        <!-- 4 NVSwitch chips, positioned at y=260, x centers: 150, 330, 570, 750 -->
+        <!-- Each GPU connects to all 4 NVSwitches -->
+
+        <!-- NVSwitch 0 at x=95, NVSwitch 1 at x=310, NVSwitch 2 at x=530, NVSwitch 3 at x=745 -->
+        <!-- Draw connections from each GPU (bottom: y=204) to each NVSwitch (top: y=256) -->
+        <!-- Using subtle lines to avoid clutter -->
+
+        <!-- GPU centers: 93, 198, 303, 408, 513, 618, 723, 828 -->
+        <!-- NVSwitch centers: 140, 330, 570, 760 -->
+
+        <!-- NVSwitch 0 connections -->
+        <line x1="93"  y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="198" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="303" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="408" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="513" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="618" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="723" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="828" y1="204" x2="140" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+
+        <!-- NVSwitch 1 connections -->
+        <line x1="93"  y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="198" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="303" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="408" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="513" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="618" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="723" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="828" y1="204" x2="330" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+
+        <!-- NVSwitch 2 connections -->
+        <line x1="93"  y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="198" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="303" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="408" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="513" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="618" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="723" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="828" y1="204" x2="570" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+
+        <!-- NVSwitch 3 connections -->
+        <line x1="93"  y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="198" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="303" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="408" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="513" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="618" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="723" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+        <line x1="828" y1="204" x2="760" y2="256" stroke="#a78bfa" stroke-width="1.2" opacity="0.4"/>
+
+        <!-- ===== 4 NVSwitch chips ===== -->
+        <rect x="85"  y="256" width="110" height="40" rx="6" fill="url(#nvsGrad)" filter="url(#shadow1)"/>
+        <text x="140" y="275" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold" font-family="sans-serif">NVSwitch 0</text>
+        <text x="140" y="289" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">64 ports &bull; 13.6 TB/s</text>
+
+        <rect x="275" y="256" width="110" height="40" rx="6" fill="url(#nvsGrad)" filter="url(#shadow1)"/>
+        <text x="330" y="275" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold" font-family="sans-serif">NVSwitch 1</text>
+        <text x="330" y="289" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">64 ports &bull; 13.6 TB/s</text>
+
+        <rect x="515" y="256" width="110" height="40" rx="6" fill="url(#nvsGrad)" filter="url(#shadow1)"/>
+        <text x="570" y="275" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold" font-family="sans-serif">NVSwitch 2</text>
+        <text x="570" y="289" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">64 ports &bull; 13.6 TB/s</text>
+
+        <rect x="705" y="256" width="110" height="40" rx="6" fill="url(#nvsGrad)" filter="url(#shadow1)"/>
+        <text x="760" y="275" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold" font-family="sans-serif">NVSwitch 3</text>
+        <text x="760" y="289" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">64 ports &bull; 13.6 TB/s</text>
+
+        <!-- Divider -->
+        <line x1="30" y1="320" x2="870" y2="320" stroke="#334155" stroke-width="1" stroke-dasharray="6,4"/>
+        <text x="450" y="340" text-anchor="middle" fill="#64748b" font-size="9" font-family="monospace">PCIe Gen5 Domain</text>
+
+        <!-- ===== ConnectX-7 NICs (below divider) ===== -->
+        <!-- 8 NICs, one per GPU, same x positions -->
+        <rect x="48"  y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="93"  y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 0</text>
+        <text x="93"  y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="153" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="198" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 1</text>
+        <text x="198" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="258" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="303" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 2</text>
+        <text x="303" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="363" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="408" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 3</text>
+        <text x="408" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="468" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="513" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 4</text>
+        <text x="513" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="573" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="618" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 5</text>
+        <text x="618" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="678" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="723" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 6</text>
+        <text x="723" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <rect x="783" y="355" width="90" height="40" rx="6" fill="url(#nicGrad)" filter="url(#shadow1)"/>
+        <text x="828" y="373" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">CX-7 NIC 7</text>
+        <text x="828" y="387" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G IB NDR</text>
+
+        <!-- PCIe lines GPU to NIC -->
+        <line x1="93"  y1="204" x2="93"  y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="198" y1="204" x2="198" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="303" y1="204" x2="303" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="408" y1="204" x2="408" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="513" y1="204" x2="513" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="618" y1="204" x2="618" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="723" y1="204" x2="723" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="828" y1="204" x2="828" y2="355" stroke="#60a5fa" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+
+        <!-- NIC output arrows to fabric -->
+        <text x="450" y="420" text-anchor="middle" fill="#3b82f6" font-size="9" font-family="monospace">To InfiniBand Fabric (400G NDR per port = 3.2 Tb/s aggregate)</text>
+        <line x1="93" y1="395" x2="93" y2="410" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+        <line x1="198" y1="395" x2="198" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+        <line x1="303" y1="395" x2="303" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+        <line x1="408" y1="395" x2="408" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+        <line x1="513" y1="395" x2="513" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+        <line x1="618" y1="395" x2="618" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+        <line x1="723" y1="395" x2="723" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+        <line x1="828" y1="395" x2="828" y2="410" stroke="#3b82f6" stroke-width="1.5"/>
+
+        <!-- ===== BlueField DPUs ===== -->
+        <rect x="250" y="445" width="170" height="40" rx="6" fill="#475569" stroke="#94a3b8" stroke-width="1" filter="url(#shadow1)"/>
+        <text x="335" y="463" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold" font-family="sans-serif">BlueField-3 DPU 0</text>
+        <text x="335" y="477" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G &bull; Storage/Mgmt</text>
+
+        <rect x="480" y="445" width="170" height="40" rx="6" fill="#475569" stroke="#94a3b8" stroke-width="1" filter="url(#shadow1)"/>
+        <text x="565" y="463" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold" font-family="sans-serif">BlueField-3 DPU 1</text>
+        <text x="565" y="477" text-anchor="middle" fill="#fff4" font-size="7" font-family="monospace">400G &bull; Storage/Mgmt</text>
+
+        <!-- DPU to CPU PCIe -->
+        <line x1="335" y1="445" x2="250" y2="92" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+        <line x1="565" y1="445" x2="650" y2="92" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+
+        <!-- ===== Storage ===== -->
+        <rect x="310" y="510" width="280" height="36" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+        <text x="450" y="530" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">8x 3.84TB NVMe U.2 SSD (30TB) + 2x 1.92TB M.2 (OS)</text>
+        <text x="450" y="543" text-anchor="middle" fill="#64748b" font-size="7" font-family="monospace">PCIe Gen5 via CPU</text>
+
+        <!-- ===== System Memory ===== -->
+        <rect x="55" y="510" width="200" height="36" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+        <text x="155" y="530" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">2 TB DDR5-4800 System RAM</text>
+        <text x="155" y="543" text-anchor="middle" fill="#64748b" font-size="7" font-family="monospace">32x 64GB DIMMs (16 per CPU)</text>
+
+        <rect x="645" y="510" width="200" height="36" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+        <text x="745" y="530" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">Power: 10.2kW Typical</text>
+        <text x="745" y="543" text-anchor="middle" fill="#64748b" font-size="7" font-family="monospace">Redundant 2+2 PSU &bull; 8U Chassis</text>
+
+        <!-- ===== Legend ===== -->
+        <rect x="40" y="576" width="820" height="90" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+        <text x="450" y="596" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="bold" font-family="sans-serif">Legend</text>
+
+        <rect x="80" y="608" width="16" height="16" rx="3" fill="url(#gpuGrad)"/>
+        <text x="104" y="621" fill="#cbd5e1" font-size="9" font-family="sans-serif">GPU (H100 SXM5)</text>
+
+        <rect x="240" y="608" width="16" height="16" rx="3" fill="url(#nvsGrad)"/>
+        <text x="264" y="621" fill="#cbd5e1" font-size="9" font-family="sans-serif">NVSwitch (3rd Gen)</text>
+
+        <rect x="420" y="608" width="16" height="16" rx="3" fill="url(#nicGrad)"/>
+        <text x="444" y="621" fill="#cbd5e1" font-size="9" font-family="sans-serif">ConnectX-7 NIC (400G IB)</text>
+
+        <rect x="640" y="608" width="16" height="16" rx="3" fill="url(#cpuGrad)"/>
+        <text x="664" y="621" fill="#cbd5e1" font-size="9" font-family="sans-serif">CPU (Xeon 8480C)</text>
+
+        <line x1="80" y1="645" x2="120" y2="645" stroke="#a78bfa" stroke-width="2" opacity="0.7"/>
+        <text x="128" y="649" fill="#cbd5e1" font-size="9" font-family="sans-serif">NVLink 4.0 (900 GB/s bidi)</text>
+
+        <line x1="340" y1="645" x2="380" y2="645" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <text x="388" y="649" fill="#cbd5e1" font-size="9" font-family="sans-serif">PCIe Gen5 x16 (128 GB/s bidi)</text>
+
+        <line x1="600" y1="645" x2="640" y2="645" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3,3"/>
+        <text x="648" y="649" fill="#cbd5e1" font-size="9" font-family="sans-serif">Management / Storage Network</text>
+      </svg>
+    </div>
+
+    <div class="info-card">
+      <h3>PCIe Gen5 &amp; CPU-GPU Communication</h3>
+      <p>
+        While NVLink provides the primary high-bandwidth path between GPUs, the <strong>PCIe Gen5</strong>
+        bus connects each GPU to its host CPU and to its dedicated ConnectX-7 NIC. PCIe Gen5 x16 provides
+        <strong>128 GB/s bidirectional</strong> (64 GB/s per direction), which is sufficient for:
+      </p>
+      <ul>
+        <li>Feeding training data from NVMe storage through the CPU to GPU memory</li>
+        <li>Moving gradient data from GPU to ConnectX-7 NIC for inter-node allreduce over InfiniBand</li>
+        <li>CPU-side operations (data preprocessing, checkpoint writes)</li>
+      </ul>
+      <p>
+        In the DGX H100, each GPU has a dedicated PCIe Gen5 x16 connection to a ConnectX-7 NIC, ensuring
+        <strong>GPUDirect RDMA</strong> can transfer data directly from GPU memory to the network without
+        staging through CPU memory. This is critical for achieving line-rate 400 Gb/s InfiniBand throughput.
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Multi-Instance GPU (MIG) &mdash; Partitioning the H100</button>
+      <div class="expandable-content">
+        <p>
+          <strong>Multi-Instance GPU (MIG)</strong> allows a single H100 to be securely partitioned into up to
+          <strong>7 independent GPU instances</strong>. Each MIG instance has:
+        </p>
+        <ul>
+          <li>Its own dedicated set of SMs (CUDA cores and Tensor Cores)</li>
+          <li>Its own partition of HBM3 memory and memory bandwidth</li>
+          <li>Its own L2 cache partition</li>
+          <li>Its own video decode and JPEG engines</li>
+          <li>Fault isolation &mdash; an error in one instance cannot affect another</li>
+        </ul>
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>MIG Profile</th>
+              <th>SMs</th>
+              <th>Memory</th>
+              <th>Memory BW</th>
+              <th>Use Case</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1g.10gb</td><td>16</td><td>10 GB</td><td>~480 GB/s</td><td>Inference (small models)</td></tr>
+            <tr><td>2g.20gb</td><td>32</td><td>20 GB</td><td>~960 GB/s</td><td>Inference (medium models)</td></tr>
+            <tr><td>3g.40gb</td><td>48</td><td>40 GB</td><td>~1.6 TB/s</td><td>Training / fine-tuning</td></tr>
+            <tr><td>4g.40gb</td><td>64</td><td>40 GB</td><td>~1.6 TB/s</td><td>Training / fine-tuning</td></tr>
+            <tr><td>7g.80gb</td><td>132</td><td>80 GB</td><td>3.35 TB/s</td><td>Full GPU (no partition)</td></tr>
+          </tbody>
+        </table>
+        <p>
+          MIG is managed via <code>nvidia-smi mig</code> commands or Kubernetes device plugins. In a
+          multi-tenant inference cluster, MIG allows a single H100 to serve 7 different users or models
+          simultaneously with hardware-level isolation &mdash; far more secure than time-slicing or MPS
+          (Multi-Process Service).
+        </p>
+        <p>
+          <strong>Note:</strong> MIG is available on both H100 SXM5 and H100 PCIe variants. When MIG is
+          enabled, NVLink between GPUs is <em>not</em> available for the individual MIG instances &mdash;
+          each instance sees only its own partition. This is a deliberate design choice for isolation.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       4. DGX SUPERPOD ARCHITECTURE
+       ========================================================= -->
+  <div class="subsection" id="superpod-architecture">
+    <h2>4. DGX SuperPOD Architecture</h2>
+
+    <div class="info-card">
+      <h3>Scaling Hierarchy</h3>
+      <p>NVIDIA defines a clear scaling hierarchy for H100-based infrastructure:</p>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Scale Unit</th>
+            <th>Composition</th>
+            <th>GPUs</th>
+            <th>FP8 (Sparse)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Scalable Unit (SU)</td>
+            <td>1&times; DGX H100</td>
+            <td>8</td>
+            <td>~32 PFLOPS</td>
+          </tr>
+          <tr>
+            <td>SuperPOD</td>
+            <td>32&times; DGX H100</td>
+            <td>256</td>
+            <td>~1 ExaFLOP</td>
+          </tr>
+          <tr>
+            <td>Multi-SuperPOD (example: 4x)</td>
+            <td>128&times; DGX H100</td>
+            <td>1,024</td>
+            <td>~4 ExaFLOPS</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h3>SuperPOD Networking &mdash; Leaf-Spine InfiniBand Fabric</h3>
+      <p>
+        The DGX H100 SuperPOD uses a <strong>two-tier leaf-spine fat-tree topology</strong> built entirely
+        with <strong>NVIDIA Quantum-2 QM9700</strong> InfiniBand NDR switches (64-port, 400 Gb/s per port).
+      </p>
+      <h4>Compute Fabric</h4>
+      <ul>
+        <li><strong>Leaf switches:</strong> Each QM9700 leaf switch connects to 32 DGX ports (one per NIC,
+            across multiple DGX nodes). With 64 ports per switch, the remaining 32 ports uplink to spine
+            switches. This gives a <strong>1:1 subscription ratio</strong> (full bisection bandwidth).</li>
+        <li><strong>Spine switches:</strong> The spine layer aggregates all leaf switches. For a 32-node
+            SuperPOD with 256 ConnectX-7 NICs, the fabric uses <strong>8 leaf switches</strong> and
+            <strong>8 spine switches</strong> (Quantum-2 QM9700), delivering a non-blocking fabric where
+            any DGX node can communicate with any other node at the full 400 Gb/s per NIC &times; 8 NICs
+            = 3.2 Tb/s per node.</li>
+      </ul>
+      <h4>Storage &amp; Management Fabric</h4>
+      <ul>
+        <li>The 64 BlueField-3 DPUs (2 per node) connect to a <strong>separate InfiniBand fabric</strong>
+            dedicated to storage traffic (connecting to NVIDIA-qualified parallel file systems like
+            Lustre, GPFS/Spectrum Scale, or VAST Data) and in-band management.</li>
+        <li>An additional out-of-band Ethernet management network provides BMC/IPMI access.</li>
+      </ul>
+    </div>
+
+    <!-- ===================== SVG: SuperPOD Leaf-Spine Topology ===================== -->
+    <div class="diagram-container">
+      <h3>DGX H100 SuperPOD &mdash; Leaf-Spine InfiniBand Fabric</h3>
+      <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="Diagram showing DGX SuperPOD leaf-spine network topology with 32 DGX nodes, leaf switches, and spine switches">
+        <defs>
+          <linearGradient id="spineGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#f472b6"/>
+            <stop offset="100%" stop-color="#be185d"/>
+          </linearGradient>
+          <linearGradient id="leafGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#818cf8"/>
+            <stop offset="100%" stop-color="#4338ca"/>
+          </linearGradient>
+          <linearGradient id="dgxGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#4ade80"/>
+            <stop offset="100%" stop-color="#15803d"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Background -->
+        <rect x="0" y="0" width="900" height="520" rx="12" fill="#0f172a"/>
+        <text x="450" y="28" text-anchor="middle" fill="#94a3b8" font-size="13" font-family="monospace">DGX H100 SuperPOD &mdash; 32 Nodes / 256 GPUs / Full Bisection Bandwidth</text>
+
+        <!-- ===== Tier Labels ===== -->
+        <text x="22" y="72" fill="#64748b" font-size="9" font-family="monospace" transform="rotate(-90,22,72)">SPINE</text>
+        <text x="22" y="195" fill="#64748b" font-size="9" font-family="monospace" transform="rotate(-90,22,195)">LEAF</text>
+        <text x="22" y="350" fill="#64748b" font-size="9" font-family="monospace" transform="rotate(-90,22,350)">COMPUTE</text>
+
+        <!-- ===== 8 Spine Switches ===== -->
+        <rect x="75"  y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="118" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 0</text>
+        <rect x="175" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="218" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 1</text>
+        <rect x="275" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="318" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 2</text>
+        <rect x="375" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="418" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 3</text>
+        <rect x="475" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="518" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 4</text>
+        <rect x="575" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="618" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 5</text>
+        <rect x="675" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="718" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 6</text>
+        <rect x="775" y="50" width="86" height="34" rx="5" fill="url(#spineGrad)" filter="url(#shadow1)"/>
+        <text x="818" y="71" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Spine 7</text>
+
+        <text x="450" y="48" text-anchor="middle" fill="#f472b6" font-size="8" font-family="monospace">Quantum-2 QM9700 (64x 400G NDR ports each)</text>
+
+        <!-- ===== 8 Leaf Switches ===== -->
+        <rect x="75"  y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="118" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 0</text>
+        <rect x="175" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="218" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 1</text>
+        <rect x="275" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="318" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 2</text>
+        <rect x="375" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="418" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 3</text>
+        <rect x="475" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="518" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 4</text>
+        <rect x="575" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="618" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 5</text>
+        <rect x="675" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="718" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 6</text>
+        <rect x="775" y="135" width="86" height="34" rx="5" fill="url(#leafGrad)" filter="url(#shadow1)"/>
+        <text x="818" y="156" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">Leaf 7</text>
+
+        <!-- Leaf-to-Spine connections (each leaf connects to all 8 spines) -->
+        <!-- Simplified: show lines from each leaf center to a few spines to avoid total clutter, plus note -->
+        <!-- Leaf 0 to all spines -->
+        <line x1="118" y1="135" x2="118" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+        <line x1="118" y1="135" x2="218" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+        <line x1="118" y1="135" x2="318" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="118" y1="135" x2="418" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="118" y1="135" x2="518" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="118" y1="135" x2="618" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="118" y1="135" x2="718" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="118" y1="135" x2="818" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+
+        <!-- Leaf 3 to all spines (representative middle leaf) -->
+        <line x1="418" y1="135" x2="118" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="418" y1="135" x2="218" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="418" y1="135" x2="318" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+        <line x1="418" y1="135" x2="418" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+        <line x1="418" y1="135" x2="518" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+        <line x1="418" y1="135" x2="618" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="418" y1="135" x2="718" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="418" y1="135" x2="818" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+
+        <!-- Leaf 7 to all spines -->
+        <line x1="818" y1="135" x2="118" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="818" y1="135" x2="218" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="818" y1="135" x2="318" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="818" y1="135" x2="418" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="818" y1="135" x2="518" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="818" y1="135" x2="618" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.15"/>
+        <line x1="818" y1="135" x2="718" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+        <line x1="818" y1="135" x2="818" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.3"/>
+
+        <!-- Additional leaf-spine for others (lighter, implied full mesh) -->
+        <line x1="218" y1="135" x2="218" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.25"/>
+        <line x1="318" y1="135" x2="318" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.25"/>
+        <line x1="518" y1="135" x2="518" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.25"/>
+        <line x1="618" y1="135" x2="618" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.25"/>
+        <line x1="718" y1="135" x2="718" y2="84" stroke="#818cf8" stroke-width="0.7" opacity="0.25"/>
+
+        <text x="450" y="128" text-anchor="middle" fill="#818cf8" font-size="8" font-family="monospace">Every leaf connects to all 8 spines (32 uplinks each = 1:1 ratio)</text>
+
+        <!-- ===== DGX Nodes (4 rows of 8) ===== -->
+        <text x="450" y="190" text-anchor="middle" fill="#64748b" font-size="8" font-family="monospace">32 DGX H100 Nodes (8 GPUs + 8 NICs each)</text>
+
+        <!-- Row 1: DGX 0-7 connected to Leaf 0-1 -->
+        <!-- DGX boxes -->
+        <rect x="60"  y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="100" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 0</text>
+        <text x="100" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="155" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="195" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 1</text>
+        <text x="195" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="250" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="290" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 2</text>
+        <text x="290" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="345" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="385" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 3</text>
+        <text x="385" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="468" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="508" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 4</text>
+        <text x="508" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="563" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="603" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 5</text>
+        <text x="603" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="658" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="698" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 6</text>
+        <text x="698" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="753" y="205" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="793" y="225" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 7</text>
+        <text x="793" y="245" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <!-- Row 1 to Leaf connections (DGX 0-3 to Leaf 0-1, DGX 4-7 to Leaf 2-3) -->
+        <line x1="100" y1="205" x2="118" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="195" y1="205" x2="118" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="195" y1="205" x2="218" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="290" y1="205" x2="218" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="290" y1="205" x2="318" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="385" y1="205" x2="318" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="385" y1="205" x2="418" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="508" y1="205" x2="418" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="508" y1="205" x2="518" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="603" y1="205" x2="518" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="603" y1="205" x2="618" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="698" y1="205" x2="618" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="698" y1="205" x2="718" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="793" y1="205" x2="718" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.4"/>
+        <line x1="793" y1="205" x2="818" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.5"/>
+        <line x1="100" y1="205" x2="218" y2="169" stroke="#4ade80" stroke-width="1" opacity="0.3"/>
+
+        <!-- Row 2: DGX 8-15 -->
+        <rect x="60"  y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="100" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 8</text>
+        <text x="100" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="155" y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="195" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 9</text>
+        <text x="195" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="250" y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="290" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 10</text>
+        <text x="290" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="345" y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="385" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 11</text>
+        <text x="385" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <text x="508" y="290" text-anchor="middle" fill="#64748b" font-size="20" font-family="sans-serif">...</text>
+
+        <rect x="563" y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="603" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 13</text>
+        <text x="603" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="658" y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="698" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 14</text>
+        <text x="698" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <rect x="753" y="270" width="80" height="50" rx="4" fill="url(#dgxGrad)" filter="url(#shadow1)"/>
+        <text x="793" y="290" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="sans-serif">DGX 15</text>
+        <text x="793" y="310" text-anchor="middle" fill="#fff5" font-size="7" font-family="monospace">8x H100</text>
+
+        <!-- Rows 3-4 (abbreviated) -->
+        <text x="250" y="355" text-anchor="middle" fill="#64748b" font-size="10" font-family="sans-serif">DGX 16 &ndash; DGX 23 (8 nodes)</text>
+        <rect x="60" y="340" width="385" height="30" rx="4" fill="#15803d" opacity="0.2" stroke="#4ade80" stroke-width="0.5" stroke-dasharray="4,3"/>
+
+        <text x="655" y="355" text-anchor="middle" fill="#64748b" font-size="10" font-family="sans-serif">DGX 24 &ndash; DGX 31 (8 nodes)</text>
+        <rect x="468" y="340" width="385" height="30" rx="4" fill="#15803d" opacity="0.2" stroke="#4ade80" stroke-width="0.5" stroke-dasharray="4,3"/>
+
+        <!-- Totals box -->
+        <rect x="170" y="400" width="560" height="106" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+        <text x="450" y="422" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="bold" font-family="sans-serif">SuperPOD Aggregate</text>
+        <text x="200" y="445" fill="#94a3b8" font-size="9" font-family="monospace">Nodes: 32 DGX H100</text>
+        <text x="200" y="462" fill="#94a3b8" font-size="9" font-family="monospace">GPUs: 256x H100 SXM5</text>
+        <text x="200" y="479" fill="#94a3b8" font-size="9" font-family="monospace">GPU Memory: 20 TB HBM3</text>
+        <text x="200" y="496" fill="#94a3b8" font-size="9" font-family="monospace">FP8 Sparse: ~1 ExaFLOP</text>
+        <text x="500" y="445" fill="#94a3b8" font-size="9" font-family="monospace">Compute NICs: 256x CX-7 400G</text>
+        <text x="500" y="462" fill="#94a3b8" font-size="9" font-family="monospace">DPUs: 64x BlueField-3</text>
+        <text x="500" y="479" fill="#94a3b8" font-size="9" font-family="monospace">IB Switches: 8 leaf + 8 spine</text>
+        <text x="500" y="496" fill="#94a3b8" font-size="9" font-family="monospace">Power: ~330-360 kW (compute)</text>
+
+        <!-- Legend -->
+        <rect x="60" y="398" width="14" height="14" rx="3" fill="url(#spineGrad)"/>
+        <text x="80" y="410" fill="#cbd5e1" font-size="8" font-family="sans-serif">Spine</text>
+        <rect x="60" y="416" width="14" height="14" rx="3" fill="url(#leafGrad)"/>
+        <text x="80" y="428" fill="#cbd5e1" font-size="8" font-family="sans-serif">Leaf</text>
+        <rect x="60" y="434" width="14" height="14" rx="3" fill="url(#dgxGrad)"/>
+        <text x="80" y="446" fill="#cbd5e1" font-size="8" font-family="sans-serif">DGX</text>
+      </svg>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Scaling Beyond a Single SuperPOD</button>
+      <div class="expandable-content">
+        <p>
+          For workloads requiring more than 256 GPUs, multiple SuperPODs are interconnected by adding a
+          <strong>third tier of spine switches</strong> (sometimes called &ldquo;super-spines&rdquo; or
+          &ldquo;core switches&rdquo;). Each SuperPOD&rsquo;s existing spine switches become effectively
+          &ldquo;aggregation&rdquo; switches that uplink to the super-spine layer.
+        </p>
+        <p>
+          NVIDIA&rsquo;s Eos supercomputer (used internally for AI research) is built from
+          <strong>4,608 H100 GPUs</strong> (18 SuperPODs&rsquo; worth) using this multi-tier approach.
+          The Meta AI Research SuperCluster (RSC) and Microsoft Azure&rsquo;s ND H100 v5 clusters use
+          similar architectures at even larger scale (tens of thousands of H100s).
+        </p>
+        <p>
+          At these scales, careful attention must be paid to:
+        </p>
+        <ul>
+          <li><strong>Adaptive routing:</strong> InfiniBand NDR supports adaptive routing to avoid congestion
+              hotspots in the fabric</li>
+          <li><strong>Rail-optimized topology:</strong> NVIDIA&rsquo;s &ldquo;rail-optimized&rdquo; design
+              connects the same-numbered NIC from each DGX (e.g., NIC 3 from all 32 nodes) to the same leaf
+              switch. This means allreduce patterns that operate per-rail see minimal switch hops.</li>
+          <li><strong>Job placement:</strong> Schedulers (e.g., NVIDIA Base Command Manager) topology-aware
+              scheduling to place multi-node jobs on nodes sharing leaf switches whenever possible</li>
+          <li><strong>SHARP (Scalable Hierarchical Aggregation and Reduction Protocol):</strong> Offloads
+              allreduce collective operations to the switch ASICs themselves, reducing network traffic by up to
+              2&times; for data-parallel training</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       5. BLUEFIELD DPU
+       ========================================================= -->
+  <div class="subsection" id="bluefield-dpu">
+    <h2>5. NVIDIA BlueField DPU</h2>
+
+    <div class="info-card">
+      <h3>What is a DPU (Data Processing Unit)?</h3>
+      <p>
+        A <strong>Data Processing Unit (DPU)</strong> is a specialized processor that combines a high-performance
+        network interface with a programmable multi-core CPU and hardware acceleration engines. It sits on the
+        PCIe bus alongside GPUs and CPUs but handles <em>infrastructure-level tasks</em> that would otherwise
+        consume host CPU cycles or require dedicated appliances:
+      </p>
+      <ul>
+        <li><strong>Network virtualization:</strong> VXLAN/Geneve encap/decap, OVS offload, connection tracking</li>
+        <li><strong>Storage disaggregation:</strong> NVMe-oF (NVMe over Fabrics) target and initiator, compression, encryption</li>
+        <li><strong>Security:</strong> IPsec/TLS inline encryption, hardware root of trust, secure boot chain</li>
+        <li><strong>Telemetry:</strong> Per-flow monitoring, congestion detection, What Just Happened (WJH) analytics</li>
+      </ul>
+      <p>
+        In a DGX H100, the 2 BlueField-3 DPUs handle <em>all</em> storage I/O and management-plane networking,
+        freeing the host CPUs and GPUs to focus exclusively on AI computation. The DPU runs its own ARM-based
+        operating system (typically Ubuntu on the ARM cores) and presents virtualized devices to the host.
+      </p>
+    </div>
+
+    <div class="info-card highlight-card">
+      <h3>BlueField-3 Specifications</h3>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Specification</th>
+            <th>BlueField-3</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Network Speed</td><td>400 Gb/s InfiniBand NDR or Ethernet</td></tr>
+          <tr><td>Network Ports</td><td>1x 400G or 2x 200G (OSFP/QSFP)</td></tr>
+          <tr><td>ARM CPU Cores</td><td>16x Arm Cortex-A78 cores (up to 3.0 GHz)</td></tr>
+          <tr><td>On-chip Memory</td><td>16 GB DDR5 (on-board, dedicated to DPU)</td></tr>
+          <tr><td>PCIe</td><td>Gen5 x16 host interface</td></tr>
+          <tr><td>Crypto Engines</td><td>Hardware IPsec, TLS, AES-XTS (line-rate 400G)</td></tr>
+          <tr><td>Regex Engines</td><td>Hardware regex accelerators for DPI / IDS</td></tr>
+          <tr><td>Storage Offload</td><td>NVMe-oF SNAP (Software-defined Network Accelerated Processing)</td></tr>
+          <tr><td>Virtio Emulation</td><td>Hardware virtio-net, virtio-blk acceleration</td></tr>
+          <tr><td>RoCE / IB</td><td>RDMA with GPUDirect Storage support</td></tr>
+          <tr><td>TDP</td><td>~75W</td></tr>
+          <tr><td>Form Factor</td><td>OSFP or OCP 3.0 SFF</td></tr>
+          <tr><td>SDK</td><td>NVIDIA DOCA (Data Center Infrastructure on a Chip Architecture)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">DOCA SDK &amp; BlueField Programming Model</button>
+      <div class="expandable-content">
+        <p>
+          <strong>DOCA (Data Center Infrastructure on a Chip Architecture)</strong> is NVIDIA&rsquo;s SDK for
+          programming BlueField DPUs. It provides:
+        </p>
+        <ul>
+          <li><strong>DOCA Flow:</strong> Hardware-offloaded packet processing pipeline (match + action, similar
+              to P4 or OpenFlow concepts). Programs the DPU&rsquo;s eSwitch hardware to process packets at
+              line rate without involving the ARM cores.</li>
+          <li><strong>DOCA GPUNetIO:</strong> Enables GPUDirect RDMA from GPU memory through the DPU, allowing
+              GPU-to-storage data paths that bypass the host CPU entirely.</li>
+          <li><strong>DOCA Compress / Decompress:</strong> Hardware-accelerated LZ4 and Deflate for inline
+              data reduction on storage traffic.</li>
+          <li><strong>DOCA SHA / AES / Regex:</strong> Cryptographic and pattern-matching acceleration for
+              security workloads.</li>
+          <li><strong>DOCA App Shield:</strong> Runtime integrity monitoring of the host OS and applications
+              from the DPU&rsquo;s isolated security domain.</li>
+        </ul>
+        <p>
+          Developers write DOCA applications in C, which run on the BlueField&rsquo;s ARM cores. The DOCA
+          libraries abstract the DPU&rsquo;s hardware accelerators, allowing developers to express intent
+          (e.g., &ldquo;encrypt this flow at line rate&rdquo;) without managing register-level hardware details.
+          DOCA also provides a gRPC-based orchestration layer so that a central controller can configure DPU
+          policies across hundreds of nodes.
+        </p>
+        <p>
+          In the DGX SuperPOD context, the BlueField-3 DPUs are primarily used for:
+        </p>
+        <ol>
+          <li><strong>GPUDirect Storage:</strong> Moving training data from the parallel file system directly
+              to GPU memory at 200 Gb/s per DPU, bypassing host CPU and system memory. This is essential for
+              keeping 8 H100 GPUs fed with data during training.</li>
+          <li><strong>In-band management:</strong> Running NVIDIA Base Command Manager agents on the DPU&rsquo;s
+              ARM cores for health monitoring, telemetry collection, and firmware updates without impacting the
+              host OS.</li>
+          <li><strong>Network isolation:</strong> Providing tenant-level isolation in multi-user environments by
+              virtualizing the storage network through the DPU&rsquo;s hardware SR-IOV and virtio capabilities.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>DPU vs. SmartNIC vs. Standard NIC</h3>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>Standard NIC</th>
+            <th>SmartNIC (e.g., CX-7)</th>
+            <th>DPU (BlueField-3)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Line-rate packet forwarding</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+          <tr><td>RDMA (RoCE / IB)</td><td>Some</td><td>Yes</td><td>Yes</td></tr>
+          <tr><td>Programmable ARM CPU</td><td>No</td><td>No</td><td>Yes (16 cores)</td></tr>
+          <tr><td>Runs own OS</td><td>No</td><td>No</td><td>Yes (Ubuntu on ARM)</td></tr>
+          <tr><td>Hardware crypto offload</td><td>No</td><td>Partial</td><td>Full (400G line rate)</td></tr>
+          <tr><td>Storage offload (NVMe-oF)</td><td>No</td><td>No</td><td>Yes</td></tr>
+          <tr><td>Network virtualization</td><td>No</td><td>Partial (SR-IOV)</td><td>Full (OVS, virtio, SR-IOV)</td></tr>
+          <tr><td>Isolated security domain</td><td>No</td><td>No</td><td>Yes</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       GENERATION COMPARISON TABLE
+       ========================================================= -->
+  <div class="subsection" id="generation-comparison">
+    <h2>GPU Generation Comparison</h2>
+    <div class="info-card">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Specification</th>
+            <th>A100 SXM (Ampere)</th>
+            <th>H100 SXM5 (Hopper)</th>
+            <th>B200 (Blackwell)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Process</td><td>TSMC 7N</td><td>TSMC 4N</td><td>TSMC 4NP (dual die)</td></tr>
+          <tr><td>Transistors</td><td>54.2B</td><td>80B</td><td>208B</td></tr>
+          <tr><td>CUDA Cores</td><td>6,912</td><td>16,896</td><td>18,432</td></tr>
+          <tr><td>Tensor Cores</td><td>432 (3rd gen)</td><td>528 (4th gen)</td><td>576 (5th gen)</td></tr>
+          <tr><td>Memory</td><td>80 GB HBM2e</td><td>80 GB HBM3</td><td>192 GB HBM3e</td></tr>
+          <tr><td>Memory BW</td><td>2.0 TB/s</td><td>3.35 TB/s</td><td>8.0 TB/s</td></tr>
+          <tr><td>NVLink BW</td><td>600 GB/s (3.0)</td><td>900 GB/s (4.0)</td><td>1,800 GB/s (5.0)</td></tr>
+          <tr><td>TDP</td><td>400W</td><td>700W</td><td>1,000W</td></tr>
+          <tr><td>FP8 Tensor (sparse)</td><td>N/A</td><td>3,958 TFLOPS</td><td>~9,000 TFLOPS</td></tr>
+          <tr><td>FP4 Tensor (sparse)</td><td>N/A</td><td>N/A</td><td>~18,000 TFLOPS</td></tr>
+          <tr><td>MIG Instances</td><td>Up to 7</td><td>Up to 7</td><td>Up to 7</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       QUIZ SECTION
+       ========================================================= -->
+  <div class="subsection quiz-section" id="quiz-racks-hardware">
+    <h2>Knowledge Check</h2>
+
+    <!-- Quiz 1 -->
+    <div class="quiz-question" data-correct="c">
+      <h4>Question 1: NVSwitch Topology</h4>
+      <p>In a DGX H100 node, how are the 8 H100 GPUs interconnected via NVSwitch?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-1" value="a"/>
+          <span>Ring topology &mdash; each GPU connects to its two neighbors, forming a circular data path with 900 GB/s per hop.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-1" value="b"/>
+          <span>Tree topology &mdash; GPUs are organized in a binary tree with NVSwitch chips at each branching node.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-1" value="c"/>
+          <span>All-to-all via 4 NVSwitch chips &mdash; every GPU connects to all 4 switches, giving any GPU full 900 GB/s access to any other GPU&rsquo;s memory.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-1" value="d"/>
+          <span>Mesh topology &mdash; each GPU has a direct point-to-point NVLink to every other GPU, requiring 7 links per GPU.</span>
+        </label>
+      </div>
+      <div class="quiz-explanation" hidden>
+        <p>
+          <strong>Correct: C.</strong> The DGX H100 uses 4 NVSwitch 3rd-gen chips to create a non-blocking
+          all-to-all topology. Each of the 8 GPUs connects to all 4 NVSwitch chips. The switches act as
+          crossbars, routing traffic so that any GPU pair communicates at the full 900 GB/s bidirectional
+          NVLink bandwidth. This is <em>not</em> a direct mesh (which would require 28 separate point-to-point
+          links) &mdash; the NVSwitch chips provide the switching fabric that makes the all-to-all connectivity
+          feasible in the 8-GPU package.
+        </p>
+      </div>
+    </div>
+
+    <!-- Quiz 2 -->
+    <div class="quiz-question" data-correct="b">
+      <h4>Question 2: DGX SuperPOD Scale</h4>
+      <p>A DGX H100 SuperPOD consists of 32 DGX H100 nodes. What is the total number of ConnectX-7 NICs used for the <em>compute InfiniBand fabric</em>, and why is this number significant?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-2" value="a"/>
+          <span>32 ConnectX-7 NICs (one per node), providing 400 Gb/s per node to the fabric.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-2" value="b"/>
+          <span>256 ConnectX-7 NICs (8 per node), because each of the 8 GPUs has a dedicated NIC for GPUDirect RDMA, yielding 3.2 Tb/s of fabric bandwidth per node.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-2" value="c"/>
+          <span>64 ConnectX-7 NICs (2 per node), matching the 2 BlueField-3 DPUs per node.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-2" value="d"/>
+          <span>512 ConnectX-7 NICs (16 per node), with 2 NICs per GPU for redundancy.</span>
+        </label>
+      </div>
+      <div class="quiz-explanation" hidden>
+        <p>
+          <strong>Correct: B.</strong> Each DGX H100 contains 8 ConnectX-7 NICs &mdash; one per GPU &mdash;
+          connected via PCIe Gen5 x16. This 1:1 GPU-to-NIC ratio ensures that each GPU can perform GPUDirect
+          RDMA over InfiniBand at 400 Gb/s independently and simultaneously, giving each node 8 &times;
+          400 Gb/s = 3.2 Tb/s of aggregate fabric bandwidth. Across 32 nodes, that is 256 NICs total.
+          The 64 BlueField-3 DPUs (2 per node) are on a <em>separate</em> storage/management fabric and are
+          not counted in the compute NIC total.
+        </p>
+      </div>
+    </div>
+
+    <!-- Quiz 3 -->
+    <div class="quiz-question" data-correct="d">
+      <h4>Question 3: BlueField DPU Role</h4>
+      <p>What is the primary reason the DGX H100 includes 2 BlueField-3 DPUs in addition to its 8 ConnectX-7 NICs?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-3" value="a"/>
+          <span>The DPUs provide additional GPU compute acceleration using their ARM cores for tensor operations.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-3" value="b"/>
+          <span>The DPUs replace the need for CPUs by handling all x86 processing on their ARM cores.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-3" value="c"/>
+          <span>The DPUs serve as backup NICs in case any of the 8 ConnectX-7 NICs fail.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="quiz-rh-3" value="d"/>
+          <span>The DPUs offload infrastructure tasks &mdash; storage I/O (GPUDirect Storage), management networking, security, and telemetry &mdash; to their dedicated ARM cores and hardware accelerators, keeping host CPUs free for data preprocessing.</span>
+        </label>
+      </div>
+      <div class="quiz-explanation" hidden>
+        <p>
+          <strong>Correct: D.</strong> BlueField-3 DPUs are infrastructure processors, not compute accelerators.
+          They run their own ARM-based OS and handle storage traffic (via NVMe-oF / GPUDirect Storage),
+          in-band management (NVIDIA Base Command Manager), security (hardware IPsec/TLS), and telemetry.
+          This separation ensures that the host Xeon CPUs are not burdened with storage and management
+          overhead during AI training, where CPU cycles are needed for data loading and preprocessing.
+          The DPUs connect to a separate InfiniBand fabric dedicated to storage, distinct from the compute
+          fabric used by the ConnectX-7 NICs.
+        </p>
+      </div>
+    </div>
+  </div>
+
+</section>

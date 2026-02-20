@@ -1,0 +1,1795 @@
+<section id="virtualization" class="content-section" data-layer="4">
+
+  <div class="section-header">
+    <h2>GPU Virtualization &amp; Multi-Tenancy</h2>
+    <p class="section-subtitle">From QEMU/KVM fundamentals through VFIO passthrough, SR-IOV, MIG partitioning, and cloud-native GPU orchestration for HPC and AI infrastructure.</p>
+  </div>
+
+  <!-- ============================================================
+       1. QEMU/KVM FUNDAMENTALS
+       ============================================================ -->
+  <div class="subsection" id="qemu-kvm-fundamentals">
+    <h3>1. QEMU/KVM Fundamentals</h3>
+
+    <div class="info-card">
+      <h4>KVM &mdash; Kernel-based Virtual Machine</h4>
+      <p>
+        KVM is a <strong>type-1 (bare-metal) hypervisor</strong> implemented as a loadable Linux kernel module.
+        When loaded, it turns the Linux kernel itself into a hypervisor. KVM exposes the
+        <code>/dev/kvm</code> character device, which userspace programs use via <code>ioctl()</code>
+        calls to create and manage virtual machines. KVM handles <strong>CPU virtualization</strong>
+        (ring-based privilege separation using Intel VT-x <code>VMCS</code> / AMD-V <code>VMCB</code>
+        structures) and <strong>memory virtualization</strong> (Extended Page Tables / Nested Page Tables
+        for hardware-assisted guest-physical to host-physical address translation).
+      </p>
+      <p>
+        KVM operates by placing the host kernel in VMX root mode and guest code in VMX non-root mode.
+        Sensitive instructions trigger a <strong>VM exit</strong> back to the host, where KVM handles the
+        event and resumes the guest via <strong>VM entry</strong>. Modern hardware virtualization extensions
+        minimize the frequency of VM exits, yielding near-native CPU performance.
+      </p>
+    </div>
+
+    <div class="info-card">
+      <h4>QEMU &mdash; Quick EMUlator</h4>
+      <p>
+        QEMU is a <strong>userspace emulator and virtualizer</strong>. Running standalone, it uses
+        dynamic binary translation (Tiny Code Generator / TCG) to emulate foreign CPU architectures.
+        When paired with KVM, QEMU delegates CPU and memory virtualization to the kernel module and
+        focuses on <strong>device emulation</strong>: disks (virtio-blk, virtio-scsi), network
+        (virtio-net with vhost-net kernel acceleration), display (virtio-gpu, QXL), and other
+        peripherals.
+      </p>
+      <p>
+        The <strong>virtio</strong> paravirtualized device framework avoids the overhead of emulating
+        real hardware by using a shared-memory transport (virtqueues) between guest driver and host
+        backend. <code>vhost-net</code> moves the virtio-net datapath into the kernel, and
+        <code>vhost-user</code> moves it into a userspace process (e.g., DPDK/OVS) for even higher
+        throughput.
+      </p>
+    </div>
+
+    <div class="spec-table">
+      <h4>QEMU/KVM Architecture Layers</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Component</th>
+            <th>Responsibility</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Hardware</td>
+            <td>Intel VT-x / AMD-V, EPT/NPT, VT-d/AMD-Vi</td>
+            <td>CPU virtualization extensions, IOMMU for device DMA isolation</td>
+          </tr>
+          <tr>
+            <td>Kernel</td>
+            <td>KVM module (<code>kvm.ko</code>, <code>kvm-intel.ko</code> / <code>kvm-amd.ko</code>)</td>
+            <td>VM lifecycle via <code>/dev/kvm</code>, vCPU scheduling, EPT/NPT management</td>
+          </tr>
+          <tr>
+            <td>Kernel</td>
+            <td>VFIO, vhost-net, vhost-vsock</td>
+            <td>Device passthrough, in-kernel virtio datapaths</td>
+          </tr>
+          <tr>
+            <td>Userspace</td>
+            <td>QEMU (<code>qemu-system-x86_64</code>)</td>
+            <td>Device emulation, machine model, migration, monitor/QMP</td>
+          </tr>
+          <tr>
+            <td>Userspace</td>
+            <td>libvirt (<code>libvirtd</code> / <code>virtqemud</code>)</td>
+            <td>VM management API, XML domain definitions, storage/network management</td>
+          </tr>
+          <tr>
+            <td>Userspace</td>
+            <td><code>virsh</code>, <code>virt-manager</code>, <code>cockpit</code></td>
+            <td>CLI and GUI tools for operators</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h4>VM Lifecycle</h4>
+      <p>
+        A virtual machine managed by libvirt follows a well-defined state machine:
+      </p>
+      <p>
+        <strong>define</strong> (persistent XML in <code>/etc/libvirt/qemu/</code>)
+        &rarr; <strong>start</strong> (QEMU process launched, guest boots)
+        &rarr; <strong>pause</strong> (vCPUs halted, memory preserved)
+        &rarr; <strong>resume</strong> (vCPUs restarted)
+        &rarr; <strong>shutdown</strong> (ACPI power button sent to guest)
+        &rarr; <strong>destroy</strong> (QEMU process killed immediately).
+        VMs can also be <strong>saved</strong> (memory snapshot to disk) and <strong>restored</strong>,
+        or <strong>live-migrated</strong> to another host with minimal downtime (&lt;100 ms for
+        memory-converging migration).
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        libvirt Domain XML Example &mdash; GPU Passthrough VM
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-xml">&lt;domain type='kvm'&gt;
+  &lt;name&gt;gpu-worker-01&lt;/name&gt;
+  &lt;memory unit='GiB'&gt;64&lt;/memory&gt;
+  &lt;vcpu placement='static'&gt;16&lt;/vcpu&gt;
+
+  &lt;cpu mode='host-passthrough' check='none'&gt;
+    &lt;topology sockets='1' dies='1' cores='8' threads='2'/&gt;
+    &lt;numa&gt;
+      &lt;cell id='0' cpus='0-15' memory='64' unit='GiB'/&gt;
+    &lt;/numa&gt;
+  &lt;/cpu&gt;
+
+  &lt;os&gt;
+    &lt;type arch='x86_64' machine='q35'&gt;hvm&lt;/type&gt;
+    &lt;boot dev='hd'/&gt;
+  &lt;/os&gt;
+
+  &lt;features&gt;
+    &lt;acpi/&gt;
+    &lt;apic/&gt;
+    &lt;ioapic driver='qemu'/&gt;
+  &lt;/features&gt;
+
+  &lt;devices&gt;
+    &lt;!-- GPU passthrough via VFIO --&gt;
+    &lt;hostdev mode='subsystem' type='pci' managed='yes'&gt;
+      &lt;source&gt;
+        &lt;address domain='0x0000' bus='0x41' slot='0x00' function='0x0'/&gt;
+      &lt;/source&gt;
+    &lt;/hostdev&gt;
+
+    &lt;!-- virtio-net with vhost acceleration --&gt;
+    &lt;interface type='bridge'&gt;
+      &lt;source bridge='br0'/&gt;
+      &lt;model type='virtio'/&gt;
+      &lt;driver name='vhost' queues='8'/&gt;
+    &lt;/interface&gt;
+
+    &lt;!-- virtio-scsi disk --&gt;
+    &lt;disk type='file' device='disk'&gt;
+      &lt;driver name='qemu' type='qcow2' cache='none' io='native'/&gt;
+      &lt;source file='/var/lib/libvirt/images/gpu-worker-01.qcow2'/&gt;
+      &lt;target dev='sda' bus='scsi'/&gt;
+    &lt;/disk&gt;
+    &lt;controller type='scsi' model='virtio-scsi'/&gt;
+  &lt;/devices&gt;
+&lt;/domain&gt;</code></pre>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h4>QEMU Command Line &mdash; GPU Passthrough VM</h4>
+      <p>The equivalent direct QEMU invocation (what libvirt generates under the hood):</p>
+<pre><code class="language-bash"># Launch a Q35-machine VM with KVM, 64 GB RAM, 16 vCPUs,
+# one VFIO-passthrough GPU, and a vhost-accelerated virtio-net NIC.
+
+qemu-system-x86_64 \
+  -enable-kvm \
+  -machine q35,accel=kvm,kernel-irqchip=split \
+  -cpu host \
+  -m 64G \
+  -smp 16,sockets=1,cores=8,threads=2 \
+  -drive file=/var/lib/libvirt/images/gpu-worker-01.qcow2,format=qcow2,if=none,id=disk0,cache=none,aio=native \
+  -device virtio-scsi-pci,id=scsi0 \
+  -device scsi-hd,drive=disk0,bus=scsi0.0 \
+  -device vfio-pci,host=41:00.0,multifunction=on \
+  -netdev tap,id=net0,vhost=on,queues=8 \
+  -device virtio-net-pci,netdev=net0,mq=on,vectors=18 \
+  -nographic \
+  -monitor unix:/tmp/qemu-monitor.sock,server,nowait</code></pre>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>Why Q35?</strong> The Q35 machine type emulates an Intel ICH9 chipset with native PCIe
+      topology instead of PCI. This is required for proper IOMMU group separation when doing
+      multi-device passthrough, and it supports PCIe-native hotplug. Always use Q35 for GPU passthrough
+      workloads.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       2. GPU PASSTHROUGH WITH VFIO
+       ============================================================ -->
+  <div class="subsection" id="gpu-passthrough-vfio">
+    <h3>2. GPU Passthrough with VFIO</h3>
+
+    <div class="info-card">
+      <h4>VFIO &mdash; Virtual Function I/O</h4>
+      <p>
+        VFIO is a Linux kernel framework that provides <strong>safe, userspace-driven device access</strong>
+        with full IOMMU protection. Unlike the legacy <code>pci-stub</code> / UIO approach, VFIO enforces
+        DMA isolation via the IOMMU, preventing a rogue VM from performing DMA attacks against host memory
+        or other guests. VFIO exposes devices through <code>/dev/vfio/</code> container and group file
+        descriptors, which QEMU opens to map device BARs (Base Address Registers) and configure interrupts
+        (MSI/MSI-X) for the guest.
+      </p>
+    </div>
+
+    <div class="info-card">
+      <h4>IOMMU Groups</h4>
+      <p>
+        An <strong>IOMMU group</strong> is the smallest set of devices that the IOMMU can isolate from
+        all other devices. All devices within a group share the same IOMMU domain and can DMA to each
+        other's memory &mdash; therefore, all devices in a group must be passed to the <em>same</em> VM
+        (or all remain on the host). This is dictated by the hardware topology and
+        <strong>ACS (Access Control Services)</strong> capability of PCIe bridges.
+      </p>
+      <p>
+        In well-designed server platforms (DGX, HGX, Supermicro GPU servers), each GPU typically
+        resides in its own IOMMU group because the root ports and PCIe switches implement ACS. Consumer
+        motherboards often lump multiple devices into one group, requiring the <code>pcie_acs_override</code>
+        kernel patch (not recommended for production).
+      </p>
+    </div>
+
+    <!-- VFIO Architecture Diagram -->
+    <div class="diagram-container">
+      <h4>VFIO GPU Passthrough Architecture</h4>
+      <svg viewBox="0 0 900 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VFIO GPU passthrough architecture diagram showing host OS, KVM, QEMU, IOMMU, and direct GPU access path">
+        <defs>
+          <marker id="arrowhead-vfio" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#76b900" />
+          </marker>
+          <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#4a9eff" />
+          </marker>
+          <marker id="arrowhead-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#ff6b6b" />
+          </marker>
+          <linearGradient id="hw-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#2d2d3d" />
+            <stop offset="100%" stop-color="#1a1a2e" />
+          </linearGradient>
+        </defs>
+
+        <!-- Background regions -->
+        <!-- Hardware layer -->
+        <rect x="30" y="430" width="840" height="130" rx="8" fill="url(#hw-grad)" stroke="#555" stroke-width="1.5"/>
+        <text x="55" y="455" fill="#aaa" font-size="12" font-family="monospace">HARDWARE</text>
+
+        <!-- Host Kernel layer -->
+        <rect x="30" y="280" width="840" height="140" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+        <text x="55" y="305" fill="#94a3b8" font-size="12" font-family="monospace">HOST KERNEL</text>
+
+        <!-- Userspace layer -->
+        <rect x="30" y="20" width="840" height="250" rx="8" fill="#0f172a" stroke="#1e293b" stroke-width="1.5"/>
+        <text x="55" y="45" fill="#94a3b8" font-size="12" font-family="monospace">USERSPACE</text>
+
+        <!-- ===== VM (Guest) ===== -->
+        <rect x="60" y="55" width="380" height="200" rx="6" fill="#1a1a2e" stroke="#76b900" stroke-width="2"/>
+        <text x="200" y="78" fill="#76b900" font-size="14" font-weight="bold" text-anchor="middle" font-family="sans-serif">Virtual Machine (Guest)</text>
+
+        <!-- Guest App -->
+        <rect x="80" y="90" width="150" height="40" rx="4" fill="#2d1f4e" stroke="#8b5cf6" stroke-width="1.5"/>
+        <text x="155" y="115" fill="#c4b5fd" font-size="12" text-anchor="middle" font-family="sans-serif">AI/HPC Application</text>
+
+        <!-- Guest NVIDIA Driver -->
+        <rect x="80" y="145" width="150" height="40" rx="4" fill="#3d2e0a" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="155" y="165" fill="#fbbf24" font-size="11" text-anchor="middle" font-family="sans-serif">NVIDIA Driver</text>
+        <text x="155" y="179" fill="#d4a00a" font-size="9" text-anchor="middle" font-family="monospace">(native, unmodified)</text>
+
+        <!-- Guest virtio-net driver -->
+        <rect x="260" y="90" width="160" height="40" rx="4" fill="#1a2e1a" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="340" y="115" fill="#86efac" font-size="11" text-anchor="middle" font-family="sans-serif">virtio-net driver</text>
+
+        <!-- Guest OS -->
+        <rect x="260" y="145" width="160" height="40" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
+        <text x="340" y="168" fill="#94a3b8" font-size="12" text-anchor="middle" font-family="sans-serif">Guest Linux Kernel</text>
+
+        <!-- Guest MMIO to GPU bar -->
+        <rect x="80" y="200" width="150" height="40" rx="4" fill="#1e3a1e" stroke="#76b900" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="155" y="218" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">GPU BAR MMIO</text>
+        <text x="155" y="232" fill="#5a8f00" font-size="9" text-anchor="middle" font-family="monospace">(direct mapped)</text>
+
+        <!-- ===== QEMU Process ===== -->
+        <rect x="480" y="55" width="370" height="200" rx="6" fill="#1a1a2e" stroke="#4a9eff" stroke-width="2"/>
+        <text x="665" y="78" fill="#4a9eff" font-size="14" font-weight="bold" text-anchor="middle" font-family="sans-serif">QEMU Process</text>
+
+        <!-- QEMU device emulation -->
+        <rect x="500" y="92" width="155" height="35" rx="4" fill="#0c2d48" stroke="#4a9eff" stroke-width="1.5"/>
+        <text x="577" y="114" fill="#7ec8ff" font-size="11" text-anchor="middle" font-family="sans-serif">Device Emulation</text>
+
+        <!-- QEMU virtio-net backend -->
+        <rect x="500" y="138" width="155" height="35" rx="4" fill="#0c2d48" stroke="#4a9eff" stroke-width="1.5"/>
+        <text x="577" y="160" fill="#7ec8ff" font-size="11" text-anchor="middle" font-family="sans-serif">virtio-net (vhost)</text>
+
+        <!-- QEMU VFIO handler -->
+        <rect x="680" y="92" width="150" height="81" rx="4" fill="#2e1a1a" stroke="#ff6b6b" stroke-width="1.5"/>
+        <text x="755" y="115" fill="#fca5a5" font-size="12" text-anchor="middle" font-family="sans-serif">VFIO Handler</text>
+        <text x="755" y="133" fill="#f87171" font-size="10" text-anchor="middle" font-family="monospace">/dev/vfio/42</text>
+        <text x="755" y="149" fill="#f87171" font-size="10" text-anchor="middle" font-family="monospace">ioctl() + mmap()</text>
+        <text x="755" y="165" fill="#ef4444" font-size="9" text-anchor="middle" font-family="monospace">BAR mapping to guest</text>
+
+        <!-- QEMU QMP Monitor -->
+        <rect x="500" y="186" width="155" height="30" rx="4" fill="#0c2d48" stroke="#4a9eff" stroke-width="1"/>
+        <text x="577" y="206" fill="#4a9eff" font-size="10" text-anchor="middle" font-family="monospace">QMP Monitor / Migration</text>
+
+        <!-- QEMU KVM fd -->
+        <rect x="680" y="186" width="150" height="30" rx="4" fill="#1e293b" stroke="#64748b" stroke-width="1"/>
+        <text x="755" y="206" fill="#94a3b8" font-size="10" text-anchor="middle" font-family="monospace">/dev/kvm ioctl()</text>
+
+        <!-- ===== Kernel Modules ===== -->
+        <!-- KVM -->
+        <rect x="480" y="315" width="170" height="50" rx="4" fill="#1e3a5f" stroke="#4a9eff" stroke-width="2"/>
+        <text x="565" y="337" fill="#7ec8ff" font-size="13" font-weight="bold" text-anchor="middle" font-family="sans-serif">KVM Module</text>
+        <text x="565" y="355" fill="#4a9eff" font-size="10" text-anchor="middle" font-family="monospace">CPU + Memory Virt</text>
+
+        <!-- VFIO -->
+        <rect x="60" y="315" width="170" height="50" rx="4" fill="#3d1a1a" stroke="#ff6b6b" stroke-width="2"/>
+        <text x="145" y="337" fill="#fca5a5" font-size="13" font-weight="bold" text-anchor="middle" font-family="sans-serif">VFIO Driver</text>
+        <text x="145" y="355" fill="#ff6b6b" font-size="10" text-anchor="middle" font-family="monospace">vfio-pci</text>
+
+        <!-- IOMMU driver -->
+        <rect x="270" y="315" width="170" height="50" rx="4" fill="#2e2e1a" stroke="#facc15" stroke-width="2"/>
+        <text x="355" y="337" fill="#fde68a" font-size="13" font-weight="bold" text-anchor="middle" font-family="sans-serif">IOMMU Driver</text>
+        <text x="355" y="355" fill="#facc15" font-size="10" text-anchor="middle" font-family="monospace">intel_iommu / amd_iommu</text>
+
+        <!-- vhost-net -->
+        <rect x="690" y="315" width="160" height="50" rx="4" fill="#1a2e1a" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="770" y="337" fill="#86efac" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">vhost-net</text>
+        <text x="770" y="355" fill="#4ade80" font-size="10" text-anchor="middle" font-family="monospace">kernel datapath</text>
+
+        <!-- ===== Hardware ===== -->
+        <!-- CPU -->
+        <rect x="480" y="460" width="170" height="50" rx="4" fill="#2d2d3d" stroke="#4a9eff" stroke-width="1.5"/>
+        <text x="565" y="483" fill="#7ec8ff" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">CPU</text>
+        <text x="565" y="500" fill="#4a9eff" font-size="10" text-anchor="middle" font-family="monospace">VT-x / AMD-V + EPT/NPT</text>
+
+        <!-- IOMMU Hardware -->
+        <rect x="270" y="460" width="170" height="50" rx="4" fill="#2d2d1a" stroke="#facc15" stroke-width="1.5"/>
+        <text x="355" y="483" fill="#fde68a" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">IOMMU (VT-d)</text>
+        <text x="355" y="500" fill="#facc15" font-size="10" text-anchor="middle" font-family="monospace">DMA remapping</text>
+
+        <!-- GPU -->
+        <rect x="60" y="450" width="170" height="70" rx="4" fill="#2e3d1a" stroke="#76b900" stroke-width="2.5"/>
+        <text x="145" y="476" fill="#76b900" font-size="14" font-weight="bold" text-anchor="middle" font-family="sans-serif">NVIDIA H100</text>
+        <text x="145" y="495" fill="#5a8f00" font-size="10" text-anchor="middle" font-family="monospace">PCIe BAR0 + BAR1</text>
+        <text x="145" y="510" fill="#5a8f00" font-size="10" text-anchor="middle" font-family="monospace">BDF: 41:00.0</text>
+
+        <!-- NIC -->
+        <rect x="690" y="460" width="160" height="50" rx="4" fill="#1a2e1a" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="770" y="483" fill="#86efac" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">ConnectX-7 NIC</text>
+        <text x="770" y="500" fill="#4ade80" font-size="10" text-anchor="middle" font-family="monospace">400GbE</text>
+
+        <!-- ===== Arrows ===== -->
+        <!-- Guest GPU driver -> BAR MMIO (internal) -->
+        <line x1="155" y1="185" x2="155" y2="200" stroke="#76b900" stroke-width="1.5" marker-end="url(#arrowhead-vfio)"/>
+
+        <!-- Guest BAR MMIO -> VFIO driver (through IOMMU) -->
+        <line x1="155" y1="240" x2="145" y2="315" stroke="#76b900" stroke-width="2.5" marker-end="url(#arrowhead-vfio)"/>
+        <text x="100" y="278" fill="#76b900" font-size="10" font-weight="bold" font-family="monospace">DIRECT PATH</text>
+
+        <!-- VFIO -> IOMMU -->
+        <line x1="230" y1="340" x2="270" y2="340" stroke="#facc15" stroke-width="1.5" marker-end="url(#arrowhead-red)"/>
+
+        <!-- IOMMU driver -> IOMMU hw -->
+        <line x1="355" y1="365" x2="355" y2="460" stroke="#facc15" stroke-width="1.5" marker-end="url(#arrowhead-red)"/>
+
+        <!-- IOMMU hw -> GPU (DMA path) -->
+        <line x1="270" y1="485" x2="230" y2="485" stroke="#76b900" stroke-width="2.5" marker-end="url(#arrowhead-vfio)"/>
+        <text x="235" y="478" fill="#76b900" font-size="9" font-family="monospace">DMA</text>
+
+        <!-- VFIO -> GPU -->
+        <line x1="145" y1="365" x2="145" y2="450" stroke="#ff6b6b" stroke-width="1.5" marker-end="url(#arrowhead-red)"/>
+
+        <!-- QEMU VFIO handler -> VFIO kernel -->
+        <path d="M 755 173 L 755 260 L 145 260 L 145 315" stroke="#ff6b6b" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arrowhead-red)"/>
+        <text x="460" y="252" fill="#ff6b6b" font-size="9" font-family="monospace">config only (setup / teardown)</text>
+
+        <!-- QEMU /dev/kvm -> KVM -->
+        <line x1="755" y1="216" x2="650" y2="315" stroke="#4a9eff" stroke-width="1.5" marker-end="url(#arrowhead-blue)"/>
+
+        <!-- KVM -> CPU -->
+        <line x1="565" y1="365" x2="565" y2="460" stroke="#4a9eff" stroke-width="1.5" marker-end="url(#arrowhead-blue)"/>
+
+        <!-- vhost-net -> NIC -->
+        <line x1="770" y1="365" x2="770" y2="460" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrowhead-vfio)"/>
+
+        <!-- Legend -->
+        <rect x="60" y="537" width="810" height="28" rx="4" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+        <line x1="80" y1="551" x2="110" y2="551" stroke="#76b900" stroke-width="2.5"/>
+        <text x="115" y="555" fill="#bbb" font-size="10" font-family="sans-serif">GPU data path (near bare-metal)</text>
+        <line x1="310" y1="551" x2="340" y2="551" stroke="#4a9eff" stroke-width="1.5"/>
+        <text x="345" y="555" fill="#bbb" font-size="10" font-family="sans-serif">CPU virtualization</text>
+        <line x1="500" y1="551" x2="530" y2="551" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="535" y="555" fill="#bbb" font-size="10" font-family="sans-serif">VFIO control plane</text>
+        <line x1="690" y1="551" x2="720" y2="551" stroke="#facc15" stroke-width="1.5"/>
+        <text x="725" y="555" fill="#bbb" font-size="10" font-family="sans-serif">IOMMU/DMA</text>
+      </svg>
+    </div>
+
+    <div class="info-card">
+      <h4>Step-by-Step GPU Passthrough</h4>
+      <p>Complete procedure for passing an NVIDIA GPU to a QEMU/KVM virtual machine:</p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        Step 1: Enable IOMMU in BIOS and Kernel
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Add kernel parameters via GRUB
+# For Intel:
+sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=on iommu=pt /' /etc/default/grub
+# For AMD:
+sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="amd_iommu=on iommu=pt /' /etc/default/grub
+
+sudo update-grub && sudo reboot
+
+# Verify IOMMU is active after reboot
+dmesg | grep -i -e DMAR -e IOMMU
+# Should see: "DMAR: IOMMU enabled" or "AMD-Vi: AMD IOMMUv2 loaded"
+
+# Verify via /proc/cmdline
+cat /proc/cmdline
+# ... intel_iommu=on iommu=pt ...</code></pre>
+        <p>
+          The <code>iommu=pt</code> (passthrough) parameter tells the kernel to <em>not</em> put
+          host devices behind IOMMU translation unless explicitly needed (by VFIO). This avoids DMA
+          performance overhead for devices that remain on the host.
+        </p>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        Step 2: Identify GPU IOMMU Group
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Find the GPU's PCI address
+lspci -nn | grep -i nvidia
+# 41:00.0 3D controller [0302]: NVIDIA Corporation H100 [2330] (rev a1)
+
+# Find the IOMMU group for this device
+readlink /sys/bus/pci/devices/0000:41:00.0/iommu_group
+# ../../../kernel/iommu_groups/42
+
+# List ALL devices in that IOMMU group
+ls -la /sys/kernel/iommu_groups/42/devices/
+# 0000:41:00.0  (GPU)
+# If other devices appear here, they must ALL be passed through together
+
+# Script to enumerate all IOMMU groups
+for d in /sys/kernel/iommu_groups/*/devices/*; do
+  n=$(basename $(dirname $(dirname "$d")))
+  echo "IOMMU Group $n: $(lspci -nns ${d##*/})"
+done | sort -t: -k1 -n</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        Step 3: Unbind from Host Driver and Bind to VFIO
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Check current driver binding
+lspci -ks 41:00.0
+# Kernel driver in use: nvidia
+# Kernel modules: nvidia
+
+# Get vendor:device ID for VFIO binding
+lspci -ns 41:00.0
+# 41:00.0 0302: 10de:2330 (rev a1)
+# vendor=10de (NVIDIA), device=2330 (H100)
+
+# Method 1: Runtime unbind/rebind (immediate, no reboot)
+# Unbind from nvidia driver
+echo 0000:41:00.0 | sudo tee /sys/bus/pci/devices/0000:41:00.0/driver/unbind
+
+# Load vfio-pci module
+sudo modprobe vfio-pci
+
+# Bind to vfio-pci
+echo 10de 2330 | sudo tee /sys/bus/pci/drivers/vfio-pci/new_id
+
+# Verify
+lspci -ks 41:00.0
+# Kernel driver in use: vfio-pci
+
+# Method 2: Persistent via modprobe config (survives reboot)
+echo "options vfio-pci ids=10de:2330" | sudo tee /etc/modprobe.d/vfio.conf
+echo -e "vfio-pci\nvfio\nvfio_iommu_type1\nvfio_virqfd" | sudo tee /etc/modules-load.d/vfio.conf
+
+# Blacklist nvidia for this GPU if sharing system with other GPUs
+# (use driver binding via BDF instead for selective passthrough)
+sudo update-initramfs -u && sudo reboot</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        Step 4: Launch VM with VFIO GPU
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Launch with QEMU directly
+sudo qemu-system-x86_64 \
+  -enable-kvm \
+  -machine q35,accel=kvm,kernel-irqchip=split \
+  -cpu host \
+  -m 64G \
+  -smp 16,sockets=1,cores=8,threads=2 \
+  -drive file=disk.qcow2,format=qcow2,if=virtio \
+  -device vfio-pci,host=41:00.0 \
+  -netdev tap,id=net0,vhost=on \
+  -device virtio-net-pci,netdev=net0 \
+  -vnc :0
+
+# Or use libvirt (recommended for production)
+virsh start gpu-worker-01
+
+# Inside the guest, the GPU appears natively:
+nvidia-smi
+# Shows H100 80GB as if bare metal</code></pre>
+      </div>
+    </div>
+
+    <div class="callout callout-warning">
+      <strong>ACS (Access Control Services):</strong> For proper IOMMU isolation in multi-GPU servers,
+      the PCIe root ports and downstream switches must support ACS. Without ACS, the IOMMU cannot
+      distinguish peer-to-peer DMA between devices behind the same switch, forcing them into one IOMMU
+      group. Server-grade platforms (DGX H100, HGX, Supermicro 4124GS) have proper ACS support. Verify
+      with: <code>lspci -vvv | grep -i "access control"</code>
+    </div>
+
+    <div class="spec-table">
+      <h4>VFIO Passthrough Performance</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Bare Metal</th>
+            <th>VFIO Passthrough</th>
+            <th>Overhead</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>GPU Compute (TFLOPS FP16)</td>
+            <td>989 (H100 SXM)</td>
+            <td>~985</td>
+            <td>&lt;0.5%</td>
+          </tr>
+          <tr>
+            <td>GPU Memory Bandwidth</td>
+            <td>3.35 TB/s</td>
+            <td>~3.34 TB/s</td>
+            <td>&lt;0.3%</td>
+          </tr>
+          <tr>
+            <td>PCIe DMA Latency</td>
+            <td>~1.2 &micro;s</td>
+            <td>~1.3 &micro;s</td>
+            <td>~8%</td>
+          </tr>
+          <tr>
+            <td>NCCL AllReduce (8xGPU)</td>
+            <td>Baseline</td>
+            <td>~97-99% of baseline</td>
+            <td>1-3%</td>
+          </tr>
+          <tr>
+            <td>CUDA Kernel Launch</td>
+            <td>~3 &micro;s</td>
+            <td>~3.1 &micro;s</td>
+            <td>~3%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>Limitation:</strong> VFIO passthrough assigns the <em>entire</em> physical GPU to one VM.
+      You cannot share a single GPU among multiple VMs with VFIO alone. For GPU sharing, use
+      <strong>MIG</strong> (hardware partitioning), <strong>vGPU</strong> (time-slicing), or
+      <strong>SR-IOV</strong> (where supported). MIG slices can themselves be passed through via VFIO
+      to individual VMs.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       3. SR-IOV (Single Root I/O Virtualization)
+       ============================================================ -->
+  <div class="subsection" id="sr-iov">
+    <h3>3. SR-IOV (Single Root I/O Virtualization)</h3>
+
+    <div class="info-card">
+      <h4>What is SR-IOV?</h4>
+      <p>
+        <strong>SR-IOV</strong> is a PCIe specification that allows a single physical device to present
+        itself as multiple virtual devices at the hardware level. The physical device exposes a
+        <strong>Physical Function (PF)</strong> &mdash; the full-featured PCIe function with all
+        configuration capabilities &mdash; and one or more <strong>Virtual Functions (VFs)</strong>,
+        which are lightweight PCIe functions with their own BARs, MSI-X vectors, and queue sets, but
+        with reduced configuration space. Each VF appears as an independent PCIe device to the OS
+        and can be assigned to a different VM via VFIO, achieving near-native I/O performance without
+        software-based virtio emulation overhead.
+      </p>
+    </div>
+
+    <div class="spec-table">
+      <h4>PF vs VF Comparison</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Attribute</th>
+            <th>Physical Function (PF)</th>
+            <th>Virtual Function (VF)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PCIe Config Space</td>
+            <td>Full (Type 0, 4 KB standard + extended)</td>
+            <td>Reduced (lightweight, limited caps)</td>
+          </tr>
+          <tr>
+            <td>BAR Resources</td>
+            <td>All device BARs</td>
+            <td>Subset (own queue memory region)</td>
+          </tr>
+          <tr>
+            <td>Driver on Host</td>
+            <td>Full driver (e.g., mlx5_core)</td>
+            <td>Can be bound to vfio-pci for passthrough</td>
+          </tr>
+          <tr>
+            <td>Management</td>
+            <td>Controls VF creation, MAC assignment, VLAN, rate limit</td>
+            <td>No management control; uses assigned resources</td>
+          </tr>
+          <tr>
+            <td>Typical Count</td>
+            <td>1 per port</td>
+            <td>Up to 128-1024 per PF (device-dependent)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h4>NIC SR-IOV with ConnectX-7</h4>
+      <p>
+        SR-IOV is <strong>extremely common</strong> for network adapters. The NVIDIA/Mellanox
+        ConnectX-7 supports up to 1024 VFs per port, making it ideal for high-density VM hosting.
+        Each VF gets a hardware queue pair, its own MAC address, optional VLAN tag, and configurable
+        bandwidth limits &mdash; all enforced in hardware.
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        NIC SR-IOV Setup &mdash; ConnectX-7 (Complete Walkthrough)
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># 1. Verify SR-IOV capability
+lspci -vs 31:00.0 | grep -i "sr-iov"
+#   Capabilities: [180] Single Root I/O Virtualization (SR-IOV)
+
+# Total VFs supported
+cat /sys/class/net/ens1f0/device/sriov_totalvfs
+# 1024
+
+# 2. Create 8 Virtual Functions
+echo 8 | sudo tee /sys/class/net/ens1f0/device/sriov_numvfs
+
+# Verify VFs appeared as PCIe devices
+lspci | grep -i mellanox
+# 31:00.0 Ethernet controller: Mellanox ConnectX-7 (PF)
+# 31:00.1 Ethernet controller: Mellanox ConnectX-7 Virtual Function
+# 31:00.2 Ethernet controller: Mellanox ConnectX-7 Virtual Function
+# ... (8 VFs total)
+
+# VFs also appear as network interfaces
+ip link show ens1f0
+# ... vf 0 MAC 00:00:00:00:00:00, vf 1 MAC 00:00:00:00:00:00 ...
+
+# 3. Configure each VF (MAC, VLAN, bandwidth, spoofchk)
+sudo ip link set ens1f0 vf 0 mac 52:54:00:aa:bb:01 vlan 100 rate 50000 spoofchk on
+sudo ip link set ens1f0 vf 1 mac 52:54:00:aa:bb:02 vlan 200 rate 25000 spoofchk on
+sudo ip link set ens1f0 vf 2 mac 52:54:00:aa:bb:03 vlan 100 rate 100000 spoofchk on
+# rate is in Mbps (50000 = 50 Gbps)
+
+# 4. Verify VF configuration
+ip link show ens1f0
+# vf 0: MAC 52:54:00:aa:bb:01, vlan 100, rate 50000Mbps, spoofchk on
+# vf 1: MAC 52:54:00:aa:bb:02, vlan 200, rate 25000Mbps, spoofchk on
+
+# 5. Bind VF to vfio-pci for passthrough to a VM
+# Find VF's PCI BDF
+VF0_BDF=$(readlink -f /sys/class/net/ens1f0/device/virtfn0 | xargs basename)
+echo "$VF0_BDF"  # e.g., 0000:31:00.1
+
+# Unbind from mlx5_core
+echo "$VF0_BDF" | sudo tee /sys/bus/pci/drivers/mlx5_core/unbind
+
+# Bind to vfio-pci
+echo "vfio-pci" | sudo tee /sys/bus/pci/devices/$VF0_BDF/driver_override
+echo "$VF0_BDF" | sudo tee /sys/bus/pci/drivers_probe
+
+# 6. Pass VF to VM
+qemu-system-x86_64 -enable-kvm -m 16G -smp 4 \
+  -device vfio-pci,host=31:00.1 \
+  -drive file=vm-disk.qcow2,format=qcow2,if=virtio \
+  ...
+
+# 7. Make VFs persistent across reboot (systemd-based)
+# /etc/systemd/system/sriov-vfs.service
+# [Unit]
+# Description=Create SR-IOV VFs
+# After=network-pre.target
+# Before=network.target
+#
+# [Service]
+# Type=oneshot
+# ExecStart=/bin/bash -c 'echo 8 > /sys/class/net/ens1f0/device/sriov_numvfs'
+# RemainAfterExit=yes
+#
+# [Install]
+# WantedBy=multi-user.target</code></pre>
+      </div>
+    </div>
+
+    <div class="spec-table">
+      <h4>SR-IOV VF vs virtio-net Performance</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>SR-IOV VF (ConnectX-7)</th>
+            <th>virtio-net + vhost-net</th>
+            <th>virtio-net (userspace)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Throughput (single flow)</td>
+            <td>~100 Gbps (line rate)</td>
+            <td>~40-60 Gbps</td>
+            <td>~10-20 Gbps</td>
+          </tr>
+          <tr>
+            <td>Latency (RTT)</td>
+            <td>~2-5 &micro;s</td>
+            <td>~15-25 &micro;s</td>
+            <td>~40-80 &micro;s</td>
+          </tr>
+          <tr>
+            <td>CPU Overhead per Gbps</td>
+            <td>Minimal (hardware path)</td>
+            <td>Moderate (kernel switching)</td>
+            <td>High (QEMU context switches)</td>
+          </tr>
+          <tr>
+            <td>Live Migration</td>
+            <td>Requires bond failover or RDMA migration</td>
+            <td>Transparent (virtqueue state)</td>
+            <td>Transparent</td>
+          </tr>
+          <tr>
+            <td>Max Queues</td>
+            <td>Hardware-limited (typically 16-64 per VF)</td>
+            <td>Configurable (multiqueue)</td>
+            <td>Configurable</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h4>GPU SR-IOV</h4>
+      <p>
+        GPU SR-IOV support is <strong>limited</strong> compared to NIC SR-IOV. NVIDIA does not expose
+        native SR-IOV on most GPU products. Instead, GPU sharing is achieved through:
+      </p>
+      <ul>
+        <li><strong>NVIDIA vGPU (GRID)</strong>: A mediated passthrough (mdev) framework where the
+            NVIDIA host driver multiplexes GPU access across VMs via time-slicing or MIG-backed profiles.
+            This uses the <code>mdev</code> (mediated device) framework rather than true SR-IOV VFs.</li>
+        <li><strong>MIG + VFIO</strong>: On A100/H100, MIG instances can be exposed as individual
+            compute instances and passed to VMs. This provides true hardware isolation (each instance
+            has dedicated SMs and memory) without SR-IOV.</li>
+        <li><strong>Intel Data Center GPU Flex (Arctic Sound-M)</strong>: One of the few GPUs with
+            true SR-IOV support, exposing up to 62 VFs per PF for cloud gaming and media workloads.</li>
+      </ul>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>Best Practice for HPC/AI:</strong> In Superpod deployments, NIC SR-IOV (ConnectX-7 VFs) is
+      heavily used to provide each VM or container with a dedicated high-performance network path. GPU
+      access is typically full passthrough (VFIO) or MIG partitioning rather than SR-IOV.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       4. NVIDIA MIG (Multi-Instance GPU)
+       ============================================================ -->
+  <div class="subsection" id="nvidia-mig">
+    <h3>4. NVIDIA MIG (Multi-Instance GPU)</h3>
+
+    <div class="info-card">
+      <h4>What is MIG?</h4>
+      <p>
+        <strong>Multi-Instance GPU (MIG)</strong> is a hardware-level GPU partitioning technology
+        available on NVIDIA A100, A30, and H100 GPUs (Ampere and Hopper architectures). MIG divides
+        a single physical GPU into up to <strong>7 isolated GPU instances</strong>, each with its own
+        dedicated set of:
+      </p>
+      <ul>
+        <li><strong>Streaming Multiprocessors (SMs)</strong> &mdash; compute engines for CUDA/Tensor Core operations</li>
+        <li><strong>Memory controllers</strong> and corresponding <strong>HBM memory slice</strong> &mdash; guaranteed memory bandwidth</li>
+        <li><strong>L2 cache partition</strong> &mdash; no cache interference between instances</li>
+        <li><strong>Copy engines</strong> (CE) and <strong>decoders</strong> (NVDEC/NVJPG on supported profiles)</li>
+        <li><strong>Unique GPU instance ID</strong> &mdash; each instance is addressable as a separate GPU device</li>
+      </ul>
+      <p>
+        MIG provides true <strong>hardware-level isolation</strong>: a workload running on one MIG
+        instance cannot observe or interfere with workloads on other instances, including memory access
+        patterns, cache behavior, and error conditions (ECC errors are scoped to the instance). This is
+        fundamentally different from time-slicing, where workloads share all resources and can experience
+        interference.
+      </p>
+    </div>
+
+    <div class="callout callout-warning">
+      <strong>MIG Availability:</strong> MIG is only available on data center GPUs with Ampere or newer
+      architecture: A100 (40GB/80GB), A30 (24GB), H100 (80GB), and H200 (141GB). It is
+      <em>not available</em> on consumer GPUs (RTX 4090), professional GPUs (RTX 6000 Ada), or older
+      data center GPUs (V100, T4). MIG requires the GPU to be in MIG mode, which requires a GPU reset
+      or reboot to enable/disable.
+    </div>
+
+    <!-- MIG Partitioning Diagram -->
+    <div class="diagram-container">
+      <h4>H100 MIG Partitioning Profiles</h4>
+      <svg viewBox="0 0 920 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MIG partitioning visual showing an H100 GPU divided into slices with SM counts and memory per slice">
+        <defs>
+          <linearGradient id="mig-gpu-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#2e3d1a"/>
+            <stop offset="100%" stop-color="#1a2e0f"/>
+          </linearGradient>
+          <linearGradient id="slice-1g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#4a1942"/>
+            <stop offset="100%" stop-color="#2d1028"/>
+          </linearGradient>
+          <linearGradient id="slice-2g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#1a3a4a"/>
+            <stop offset="100%" stop-color="#0f2830"/>
+          </linearGradient>
+          <linearGradient id="slice-3g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#3a3a1a"/>
+            <stop offset="100%" stop-color="#28280f"/>
+          </linearGradient>
+          <linearGradient id="slice-4g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#1a3a2a"/>
+            <stop offset="100%" stop-color="#0f281a"/>
+          </linearGradient>
+          <linearGradient id="slice-7g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#3d2e0a"/>
+            <stop offset="100%" stop-color="#2a1f06"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Title -->
+        <text x="460" y="28" fill="#76b900" font-size="16" font-weight="bold" text-anchor="middle" font-family="sans-serif">NVIDIA H100 SXM &mdash; 80 GB HBM3 &mdash; 132 SMs Total</text>
+
+        <!-- ===== Full GPU (7g.80gb) ===== -->
+        <text x="40" y="65" fill="#f59e0b" font-size="13" font-weight="bold" font-family="sans-serif">Profile: 7g.80gb (1 instance = full GPU)</text>
+        <rect x="40" y="72" width="840" height="50" rx="6" fill="url(#slice-7g)" stroke="#f59e0b" stroke-width="2"/>
+        <text x="460" y="95" fill="#fbbf24" font-size="13" font-weight="bold" text-anchor="middle" font-family="sans-serif">7g.80gb &mdash; 132 SMs &middot; 80 GB HBM3 &middot; Full L2 &middot; All Engines</text>
+        <text x="460" y="112" fill="#d4a00a" font-size="11" text-anchor="middle" font-family="monospace">GI Profile ID: 0 &nbsp;|&nbsp; ~1979 TFLOPS FP8</text>
+
+        <!-- ===== 4g.40gb + 3g.40gb ===== -->
+        <text x="40" y="150" fill="#4ade80" font-size="13" font-weight="bold" font-family="sans-serif">Profile: 4g.40gb + 3g.40gb (2 instances)</text>
+        <rect x="40" y="157" width="480" height="50" rx="6" fill="url(#slice-4g)" stroke="#4ade80" stroke-width="2"/>
+        <text x="280" y="180" fill="#86efac" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">4g.40gb &mdash; 76 SMs &middot; 40 GB &middot; 4 Mem Ctrl</text>
+        <text x="280" y="198" fill="#4ade80" font-size="10" text-anchor="middle" font-family="monospace">GI Profile ID: 5</text>
+
+        <rect x="530" y="157" width="350" height="50" rx="6" fill="url(#slice-3g)" stroke="#facc15" stroke-width="2"/>
+        <text x="705" y="180" fill="#fde68a" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">3g.40gb &mdash; 56 SMs &middot; 40 GB &middot; 4 Mem Ctrl</text>
+        <text x="705" y="198" fill="#facc15" font-size="10" text-anchor="middle" font-family="monospace">GI Profile ID: 2</text>
+
+        <!-- ===== 3g.40gb + 2x 2g.20gb ===== -->
+        <text x="40" y="235" fill="#38bdf8" font-size="13" font-weight="bold" font-family="sans-serif">Profile: 3g.40gb + 2x 2g.20gb (3 instances)</text>
+        <rect x="40" y="242" width="360" height="50" rx="6" fill="url(#slice-3g)" stroke="#facc15" stroke-width="2"/>
+        <text x="220" y="265" fill="#fde68a" font-size="12" font-weight="bold" text-anchor="middle" font-family="sans-serif">3g.40gb &mdash; 56 SMs &middot; 40 GB</text>
+        <text x="220" y="282" fill="#facc15" font-size="10" text-anchor="middle" font-family="monospace">GI Profile ID: 2</text>
+
+        <rect x="410" y="242" width="225" height="50" rx="6" fill="url(#slice-2g)" stroke="#38bdf8" stroke-width="2"/>
+        <text x="522" y="265" fill="#7dd3fc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">2g.20gb &mdash; 28 SMs &middot; 20 GB</text>
+        <text x="522" y="282" fill="#38bdf8" font-size="10" text-anchor="middle" font-family="monospace">GI Profile ID: 14</text>
+
+        <rect x="645" y="242" width="235" height="50" rx="6" fill="url(#slice-2g)" stroke="#38bdf8" stroke-width="2"/>
+        <text x="762" y="265" fill="#7dd3fc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">2g.20gb &mdash; 28 SMs &middot; 20 GB</text>
+        <text x="762" y="282" fill="#38bdf8" font-size="10" text-anchor="middle" font-family="monospace">GI Profile ID: 14</text>
+
+        <!-- ===== 7x 1g.10gb ===== -->
+        <text x="40" y="320" fill="#e879f9" font-size="13" font-weight="bold" font-family="sans-serif">Profile: 7x 1g.10gb (7 instances &mdash; maximum density)</text>
+        <g>
+          <rect x="40" y="327" width="115" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="97" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="97" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16 SMs</text>
+          <text x="97" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="97" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+        <g>
+          <rect x="162" y="327" width="115" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="219" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="219" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16 SMs</text>
+          <text x="219" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="219" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+        <g>
+          <rect x="284" y="327" width="115" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="341" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="341" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16 SMs</text>
+          <text x="341" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="341" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+        <g>
+          <rect x="406" y="327" width="115" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="463" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="463" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16 SMs</text>
+          <text x="463" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="463" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+        <g>
+          <rect x="528" y="327" width="115" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="585" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="585" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16 SMs</text>
+          <text x="585" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="585" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+        <g>
+          <rect x="650" y="327" width="115" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="707" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="707" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16 SMs</text>
+          <text x="707" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="707" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+        <g>
+          <rect x="772" y="327" width="108" height="80" rx="5" fill="url(#slice-1g)" stroke="#e879f9" stroke-width="2"/>
+          <text x="826" y="352" fill="#f0abfc" font-size="11" font-weight="bold" text-anchor="middle" font-family="sans-serif">1g.10gb</text>
+          <text x="826" y="369" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">16+4 SMs</text>
+          <text x="826" y="383" fill="#d946ef" font-size="9" text-anchor="middle" font-family="monospace">10 GB HBM</text>
+          <text x="826" y="397" fill="#a855f7" font-size="9" text-anchor="middle" font-family="monospace">1 Mem Ctrl</text>
+        </g>
+
+        <!-- Annotation for 7x1g -->
+        <text x="460" y="430" fill="#aaa" font-size="11" text-anchor="middle" font-family="sans-serif">Each 1g.10gb instance: ~16 SMs, 10 GB HBM3, 1 memory controller, isolated L2 cache partition</text>
+        <text x="460" y="448" fill="#888" font-size="10" text-anchor="middle" font-family="monospace">GI Profile ID: 19 &nbsp;|&nbsp; 7th slice gets remaining SMs (16 + leftover = 20)</text>
+
+        <!-- HBM3 memory bar at bottom -->
+        <text x="40" y="478" fill="#76b900" font-size="13" font-weight="bold" font-family="sans-serif">Physical HBM3 Memory Layout (80 GB total, 8 memory controllers)</text>
+        <g>
+          <rect x="40" y="486" width="105" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="92" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC0: 10GB</text>
+        </g>
+        <g>
+          <rect x="150" y="486" width="105" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="202" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC1: 10GB</text>
+        </g>
+        <g>
+          <rect x="260" y="486" width="105" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="312" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC2: 10GB</text>
+        </g>
+        <g>
+          <rect x="370" y="486" width="105" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="422" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC3: 10GB</text>
+        </g>
+        <g>
+          <rect x="480" y="486" width="105" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="532" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC4: 10GB</text>
+        </g>
+        <g>
+          <rect x="590" y="486" width="105" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="642" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC5: 10GB</text>
+        </g>
+        <g>
+          <rect x="700" y="486" width="90" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="745" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC6:10GB</text>
+        </g>
+        <g>
+          <rect x="795" y="486" width="85" height="35" rx="3" fill="#1a2e0f" stroke="#76b900" stroke-width="1.5"/>
+          <text x="837" y="508" fill="#76b900" font-size="10" text-anchor="middle" font-family="monospace">MC7:10GB</text>
+        </g>
+
+        <!-- Memory controller note -->
+        <text x="460" y="545" fill="#888" font-size="10" text-anchor="middle" font-family="sans-serif">H100 has 8 HBM3 memory controllers. MIG profiles map to memory controller boundaries.</text>
+        <text x="460" y="560" fill="#888" font-size="10" text-anchor="middle" font-family="sans-serif">1g = 1 MC (10 GB), 2g = 2 MCs (20 GB), 3g = 4 MCs (40 GB), 4g = 4 MCs (40 GB), 7g = 8 MCs (80 GB).</text>
+
+        <!-- Isolation callout -->
+        <rect x="160" y="575" width="600" height="30" rx="4" fill="#1a1a2e" stroke="#e879f9" stroke-width="1"/>
+        <text x="460" y="595" fill="#e879f9" font-size="11" text-anchor="middle" font-family="sans-serif">Each MIG instance has HARDWARE-LEVEL isolation: separate SMs, memory, L2 cache, error domains</text>
+      </svg>
+    </div>
+
+    <div class="spec-table">
+      <h4>H100 SXM MIG Profile Summary</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Profile</th>
+            <th>GI Profile ID</th>
+            <th>SMs</th>
+            <th>Memory</th>
+            <th>Mem Controllers</th>
+            <th>L2 Cache</th>
+            <th>Max Instances</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>1g.10gb</code></td>
+            <td>19</td>
+            <td>16</td>
+            <td>10 GB HBM3</td>
+            <td>1</td>
+            <td>~7 MB</td>
+            <td>7</td>
+          </tr>
+          <tr>
+            <td><code>1g.10gb+me</code></td>
+            <td>20</td>
+            <td>16</td>
+            <td>10 GB HBM3</td>
+            <td>1</td>
+            <td>~7 MB</td>
+            <td>1 (includes all media engines)</td>
+          </tr>
+          <tr>
+            <td><code>1g.20gb</code></td>
+            <td>15</td>
+            <td>16</td>
+            <td>20 GB HBM3</td>
+            <td>2</td>
+            <td>~14 MB</td>
+            <td>4</td>
+          </tr>
+          <tr>
+            <td><code>2g.20gb</code></td>
+            <td>14</td>
+            <td>28</td>
+            <td>20 GB HBM3</td>
+            <td>2</td>
+            <td>~14 MB</td>
+            <td>3</td>
+          </tr>
+          <tr>
+            <td><code>3g.40gb</code></td>
+            <td>2</td>
+            <td>56</td>
+            <td>40 GB HBM3</td>
+            <td>4</td>
+            <td>~28 MB</td>
+            <td>2</td>
+          </tr>
+          <tr>
+            <td><code>4g.40gb</code></td>
+            <td>5</td>
+            <td>76</td>
+            <td>40 GB HBM3</td>
+            <td>4</td>
+            <td>~28 MB</td>
+            <td>1</td>
+          </tr>
+          <tr>
+            <td><code>7g.80gb</code></td>
+            <td>0</td>
+            <td>132</td>
+            <td>80 GB HBM3</td>
+            <td>8</td>
+            <td>~50 MB</td>
+            <td>1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        MIG Configuration &mdash; Complete Command Reference
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># ===== Enable MIG Mode =====
+# Must be done once per GPU; requires GPU reset (no active processes)
+
+# Enable MIG on GPU 0
+sudo nvidia-smi -i 0 -mig 1
+# Warning: MIG mode enable requires a GPU reset. Reboot or:
+sudo nvidia-smi -i 0 --gpu-reset
+
+# Verify MIG is enabled
+nvidia-smi -i 0 --query-gpu=mig.mode.current --format=csv,noheader
+# Enabled
+
+# ===== List Available Profiles =====
+nvidia-smi mig -i 0 -lgip
+# +-----------------------------------------------------------------------------+
+# | GPU instance profiles:                                                       |
+# | GPU   Name          ID    Instances   Memory     SMs    ...                  |
+# |   0   MIG 1g.10gb   19       7       9856 MiB    16     ...                  |
+# |   0   MIG 2g.20gb   14       3      19968 MiB    28     ...                  |
+# |   0   MIG 3g.40gb    2       2      40192 MiB    56     ...                  |
+# |   0   MIG 4g.40gb    5       1      40192 MiB    76     ...                  |
+# |   0   MIG 7g.80gb    0       1      81152 MiB   132     ...                  |
+# +-----------------------------------------------------------------------------+
+
+# ===== Create GPU Instances =====
+# Create 7x 1g.10gb instances (maximum partitioning)
+sudo nvidia-smi mig -i 0 -cgi 19,19,19,19,19,19,19
+
+# List GPU instances
+nvidia-smi mig -i 0 -lgi
+# +-------------------------------------------------------+
+# | GPU instances:                                         |
+# | GPU   Inst   Profile    Placement    ...               |
+# |   0      1   MIG 1g.10gb  {0}        ...               |
+# |   0      2   MIG 1g.10gb  {1}        ...               |
+# |   0      3   MIG 1g.10gb  {2}        ...               |
+# |   0      4   MIG 1g.10gb  {3}        ...               |
+# |   0      5   MIG 1g.10gb  {4}        ...               |
+# |   0      6   MIG 1g.10gb  {5}        ...               |
+# |   0      7   MIG 1g.10gb  {6}        ...               |
+# +-------------------------------------------------------+
+
+# ===== Create Compute Instances (CI) within each GI =====
+# Each GI needs at least one CI to be usable
+# -C flag creates default CI (uses all SMs in the GI)
+sudo nvidia-smi mig -i 0 -cgi 19,19,19,19,19,19,19 -C
+# Or create CIs individually:
+sudo nvidia-smi mig -i 0 -gi 1 -cci 0
+# Profile ID 0 = full CI (all SMs in this GI)
+
+# List compute instances
+nvidia-smi mig -i 0 -lci
+
+# ===== Verify with nvidia-smi =====
+nvidia-smi
+# Shows each MIG instance as a separate entry:
+# |   MIG 1g.10gb      1/7     9856MiB |  ...  |
+# |   MIG 1g.10gb      2/7     9856MiB |  ...  |
+# ... (7 lines)
+
+# ===== Alternative: Mixed profile configuration =====
+# Destroy all instances first
+sudo nvidia-smi mig -i 0 -dci  # destroy compute instances
+sudo nvidia-smi mig -i 0 -dgi  # destroy GPU instances
+
+# Create mixed: 1x 3g.40gb + 2x 2g.20gb
+sudo nvidia-smi mig -i 0 -cgi 2,14,14 -C
+
+# ===== Use MIG Instances =====
+# Each MIG instance has a UUID
+nvidia-smi -L
+# GPU 0: NVIDIA H100 80GB HBM3 (UUID: GPU-xxxxxxxx-xxxx-...)
+#   MIG 1g.10gb  Device 0: (UUID: MIG-xxxxxxxx-xxxx-...)
+#   MIG 1g.10gb  Device 1: (UUID: MIG-yyyyyyyy-yyyy-...)
+
+# Target a specific MIG instance
+export CUDA_VISIBLE_DEVICES=MIG-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+python train.py  # runs only on that MIG slice
+
+# Or use MIG device index syntax:
+export CUDA_VISIBLE_DEVICES=MIG-GPU-xxxxxxxx/1/0
+# Format: MIG-{GPU-UUID}/{GPU Instance ID}/{Compute Instance ID}
+
+# ===== Disable MIG Mode =====
+sudo nvidia-smi mig -i 0 -dci
+sudo nvidia-smi mig -i 0 -dgi
+sudo nvidia-smi -i 0 -mig 0
+sudo nvidia-smi -i 0 --gpu-reset</code></pre>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h4>MIG + Kubernetes</h4>
+      <p>
+        In Kubernetes, the <strong>NVIDIA GPU Operator</strong> and <strong>k8s-device-plugin</strong>
+        can automatically discover MIG instances and expose them as schedulable resources. Each MIG
+        slice appears as a distinct resource type in the node's capacity:
+      </p>
+<pre><code class="language-yaml"># Pod spec requesting a specific MIG profile
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inference-small
+spec:
+  containers:
+  - name: model-server
+    image: nvcr.io/nvidia/tritonserver:24.01-py3
+    resources:
+      limits:
+        nvidia.com/mig-1g.10gb: 1    # Request one 1g.10gb MIG slice
+---
+# Node capacity (kubectl describe node gpu-node-01):
+# Capacity:
+#   nvidia.com/mig-1g.10gb:  7
+#   nvidia.com/mig-2g.20gb:  0
+#   nvidia.com/mig-3g.40gb:  0
+#   nvidia.com/mig-7g.80gb:  0</code></pre>
+      <p>
+        The device plugin supports three MIG strategies configured via the
+        <code>mig.strategy</code> Helm value:
+      </p>
+      <ul>
+        <li><strong>none</strong>: MIG disabled; GPUs exposed as <code>nvidia.com/gpu</code></li>
+        <li><strong>single</strong>: All GPUs use the same MIG profile; resources named <code>nvidia.com/gpu</code></li>
+        <li><strong>mixed</strong>: Different MIG profiles per GPU; resources named <code>nvidia.com/mig-{profile}</code></li>
+      </ul>
+    </div>
+
+    <div class="spec-table">
+      <h4>MIG vs vGPU vs Time-Slicing</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>MIG</th>
+            <th>vGPU (GRID)</th>
+            <th>Time-Slicing (MPS/Default)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Isolation Level</td>
+            <td>Hardware (SMs, memory, L2, ECC)</td>
+            <td>Software (driver-mediated)</td>
+            <td>None (shared everything)</td>
+          </tr>
+          <tr>
+            <td>Max Partitions</td>
+            <td>7 per GPU</td>
+            <td>Up to 32 per GPU (profile-dependent)</td>
+            <td>Unlimited (time-multiplexed)</td>
+          </tr>
+          <tr>
+            <td>Memory Isolation</td>
+            <td>Dedicated HBM slice per instance</td>
+            <td>Framebuffer partitioned by profile</td>
+            <td>Shared (OOM affects all)</td>
+          </tr>
+          <tr>
+            <td>Performance Predictability</td>
+            <td>Guaranteed (dedicated resources)</td>
+            <td>Good (time-slice scheduling)</td>
+            <td>Variable (contention-dependent)</td>
+          </tr>
+          <tr>
+            <td>Fault Isolation</td>
+            <td>Yes (ECC errors scoped to instance)</td>
+            <td>Partial</td>
+            <td>No (one crash affects all)</td>
+          </tr>
+          <tr>
+            <td>GPU Support</td>
+            <td>A100, A30, H100, H200</td>
+            <td>Most data center GPUs (T4, A100, H100, L4, L40S)</td>
+            <td>All CUDA GPUs</td>
+          </tr>
+          <tr>
+            <td>License Required</td>
+            <td>No (driver-included)</td>
+            <td>Yes (NVIDIA AI Enterprise / GRID)</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td>Reconfiguration</td>
+            <td>Requires GPU reset</td>
+            <td>VM restart</td>
+            <td>Dynamic</td>
+          </tr>
+          <tr>
+            <td>Use Case</td>
+            <td>Multi-tenant inference, CI/CD, dev</td>
+            <td>VDI, multi-tenant VMs, cloud</td>
+            <td>Best-effort sharing, dev/test</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       5. NVIDIA vGPU
+       ============================================================ -->
+  <div class="subsection" id="nvidia-vgpu">
+    <h3>5. NVIDIA vGPU (GRID)</h3>
+
+    <div class="info-card">
+      <h4>Software-Based GPU Virtualization</h4>
+      <p>
+        NVIDIA vGPU (branded under <strong>NVIDIA AI Enterprise</strong> and previously
+        <strong>NVIDIA GRID</strong>) enables multiple virtual machines to share a single physical GPU.
+        The NVIDIA <strong>Virtual GPU Manager</strong> runs on the hypervisor host (KVM, VMware ESXi,
+        Citrix Hypervisor) and mediates access to the GPU hardware. Each VM runs a standard NVIDIA
+        guest driver that communicates with the vGPU Manager through a paravirtualized channel.
+      </p>
+      <p>
+        vGPU uses the Linux kernel's <strong>mdev (mediated device)</strong> framework on KVM hosts.
+        The vGPU Manager creates mdev instances (e.g.,
+        <code>/sys/class/mdev_bus/0000:41:00.0/{uuid}</code>) that are passed to QEMU as
+        <code>-device vfio-pci,sysfsdev=/sys/...</code>. Each mdev instance represents a virtual GPU
+        with a specific profile defining its framebuffer allocation and time-slice scheduling weight.
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        vGPU Architecture &amp; Configuration
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># ===== Install vGPU Manager on KVM Host =====
+# Download NVIDIA-Linux-x86_64-535.161.08-vgpu-kvm.run from NVIDIA Licensing Portal
+sudo ./NVIDIA-Linux-x86_64-535.161.08-vgpu-kvm.run --dkms
+
+# Verify vGPU Manager loaded
+lsmod | grep nvidia_vgpu_vfio
+nvidia-smi  # Shows "NVIDIA-SMI ... Driver Version: 535.161.08 (vGPU Host)"
+
+# ===== List Available vGPU Types =====
+# Each GPU exposes multiple mdev types
+ls /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/
+# nvidia-700  nvidia-701  nvidia-702  nvidia-703 ...
+
+# View profile details
+cat /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/nvidia-700/name
+# NVIDIA H100-1Q    (1 GB framebuffer, Q-series = vWS/compute)
+
+cat /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/nvidia-700/description
+# num_heads=4, frl_config=60, framebuffer=1024M, max_resolution=4096x2160
+
+cat /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/nvidia-700/available_instances
+# 16
+
+# ===== Create a vGPU Instance =====
+# Generate a UUID for the mdev device
+VGPU_UUID=$(uuidgen)
+
+# Create the mdev instance
+echo "$VGPU_UUID" | sudo tee \
+  /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/nvidia-703/create
+
+# ===== Attach to a libvirt VM =====
+# Add to domain XML:
+# &lt;hostdev mode='subsystem' type='mdev' managed='no' model='vfio-pci'&gt;
+#   &lt;source&gt;
+#     &lt;address uuid='$VGPU_UUID'/&gt;
+#   &lt;/source&gt;
+# &lt;/hostdev&gt;
+
+virsh start my-vm
+
+# ===== Inside the Guest VM =====
+# Install standard NVIDIA GRID guest driver
+nvidia-smi
+# Shows the virtual GPU (e.g., "NVIDIA H100-10C" for compute profile)</code></pre>
+      </div>
+    </div>
+
+    <div class="spec-table">
+      <h4>vGPU Profile Types</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Series</th>
+            <th>Suffix</th>
+            <th>Primary Use Case</th>
+            <th>CUDA / OpenCL</th>
+            <th>Display Heads</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Q-series</td>
+            <td><code>-Q</code></td>
+            <td>Professional visualization (Quadro-equivalent)</td>
+            <td>Yes</td>
+            <td>Up to 4</td>
+          </tr>
+          <tr>
+            <td>C-series</td>
+            <td><code>-C</code></td>
+            <td>Compute / AI inference and training</td>
+            <td>Yes</td>
+            <td>0 (headless)</td>
+          </tr>
+          <tr>
+            <td>B-series</td>
+            <td><code>-B</code></td>
+            <td>Virtual desktop (VDI)</td>
+            <td>No</td>
+            <td>Up to 2</td>
+          </tr>
+          <tr>
+            <td>A-series</td>
+            <td><code>-A</code></td>
+            <td>Virtual applications (RDSH/app streaming)</td>
+            <td>No</td>
+            <td>1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h4>Time-Slicing vs MIG-Backed vGPU</h4>
+      <p>
+        On GPUs that support MIG (A100, H100), vGPU can operate in two modes:
+      </p>
+      <ul>
+        <li>
+          <strong>Time-sliced vGPU:</strong> The vGPU scheduler rapidly context-switches between VMs
+          on a fixed time quantum (default: best-effort, or configurable equal-share / fixed-share).
+          All VMs share the full SM array and memory bandwidth but get exclusive access during their
+          time slice. Lower isolation, higher flexibility in profile sizes.
+        </li>
+        <li>
+          <strong>MIG-backed vGPU:</strong> Each vGPU instance is backed by a MIG GPU Instance.
+          The VM gets dedicated SMs, memory, and L2 cache with hardware isolation. Provides the
+          isolation benefits of MIG with the management benefits of the vGPU framework (licensing,
+          live migration, monitoring via NVIDIA DCGM).
+        </li>
+      </ul>
+<pre><code class="language-bash"># MIG-backed vGPU: first create MIG instances, then vGPU types map to them
+sudo nvidia-smi mig -i 0 -cgi 19,19,19,19,19,19,19 -C
+
+# vGPU types for MIG-backed mode appear with MIG profile in the name
+ls /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/ | grep MIG
+# nvidia-710   (H100-1g.10gb-C, compute profile for 1g.10gb MIG)
+# nvidia-711   (H100-2g.20gb-C, compute profile for 2g.20gb MIG)
+
+cat /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/nvidia-710/name
+# NVIDIA H100-1g.10gb-C</code></pre>
+    </div>
+
+    <div class="callout callout-warning">
+      <strong>Licensing:</strong> NVIDIA vGPU requires a license from the NVIDIA Licensing Server (NLS)
+      or a Delegated License Service (DLS) appliance on-premises. Each concurrent vGPU session
+      consumes one license. License types include <strong>NVIDIA AI Enterprise</strong> (full stack:
+      vGPU + containers + frameworks + support) and <strong>vWS</strong> (Quadro Virtual Workstation).
+      Without a valid license, vGPU operates in a degraded mode with reduced framebuffer and frame rate.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       6. CLOUD-NATIVE VIRTUALIZATION
+       ============================================================ -->
+  <div class="subsection" id="cloud-native-virtualization">
+    <h3>6. Cloud-Native Virtualization</h3>
+
+    <div class="info-card">
+      <h4>KubeVirt &mdash; VMs as Kubernetes Pods</h4>
+      <p>
+        <strong>KubeVirt</strong> extends Kubernetes with a CRD (Custom Resource Definition) called
+        <code>VirtualMachine</code> that allows traditional virtual machines to be managed alongside
+        containers using the Kubernetes API. Under the hood, KubeVirt runs QEMU/KVM inside a pod
+        (the <code>virt-launcher</code> pod), wrapping the VM lifecycle in Kubernetes primitives:
+        the VM is scheduled like a pod, its storage is provided via PVCs, and its network via CNI
+        plugins.
+      </p>
+      <p>
+        For GPU workloads, KubeVirt supports both <strong>GPU passthrough</strong> (VFIO)
+        and <strong>MIG device</strong> assignment to VMs. The NVIDIA GPU Operator detects KubeVirt
+        and configures the nodes appropriately, including loading VFIO drivers and configuring
+        IOMMU for devices designated for VM passthrough.
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        KubeVirt GPU Passthrough &mdash; VirtualMachine Manifest
+      </button>
+      <div class="expandable-content">
+<pre><code class="language-yaml">apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: gpu-worker-vm
+  namespace: ml-workloads
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        app: gpu-worker
+    spec:
+      domain:
+        cpu:
+          cores: 16
+          sockets: 1
+          threads: 2
+          model: host-passthrough
+          # Pin to NUMA node 0 for GPU locality
+          numa:
+            guestMappingPassthrough: {}
+        memory:
+          guest: 64Gi
+          hugepages:
+            pageSize: 1Gi
+        devices:
+          gpus:
+          - name: gpu0
+            deviceName: nvidia.com/H100_SXM  # Passed via VFIO
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: sriov-net
+            sriov: {}
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+        machine:
+          type: q35
+      networks:
+      - name: default
+        pod: {}
+      - name: sriov-net
+        multus:
+          networkName: sriov-net-100g
+      volumes:
+      - name: rootdisk
+        persistentVolumeClaim:
+          claimName: gpu-worker-root-pvc
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            package_update: true
+            packages:
+              - nvidia-driver-535
+              - cuda-toolkit-12-3</code></pre>
+      </div>
+    </div>
+
+    <div class="spec-table">
+      <h4>Bare Metal vs VM vs Container for GPU Workloads</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Attribute</th>
+            <th>Bare Metal</th>
+            <th>VM (QEMU/KVM + VFIO)</th>
+            <th>Container (Docker/K8s)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>GPU Performance</td>
+            <td>100% (baseline)</td>
+            <td>~97-99% (VFIO overhead minimal)</td>
+            <td>~100% (shares host kernel &amp; driver)</td>
+          </tr>
+          <tr>
+            <td>Isolation</td>
+            <td>Physical (separate machines)</td>
+            <td>Strong (hardware-enforced by VT-x + IOMMU)</td>
+            <td>Weak (kernel namespace + cgroups)</td>
+          </tr>
+          <tr>
+            <td>Startup Time</td>
+            <td>Minutes (BIOS/POST)</td>
+            <td>10-60 seconds</td>
+            <td>Sub-second to seconds</td>
+          </tr>
+          <tr>
+            <td>Density</td>
+            <td>1 tenant per machine</td>
+            <td>Limited by GPUs (1 GPU per VM or MIG slices)</td>
+            <td>High (time-slicing, MIG, MPS)</td>
+          </tr>
+          <tr>
+            <td>Multi-Tenancy Security</td>
+            <td>Excellent (air gap)</td>
+            <td>Excellent (hardware isolation)</td>
+            <td>Moderate (container escape risk)</td>
+          </tr>
+          <tr>
+            <td>Live Migration</td>
+            <td>Not possible</td>
+            <td>Supported (with limitations for passthrough devices)</td>
+            <td>Checkpoint/restore (CRIU, experimental for GPU)</td>
+          </tr>
+          <tr>
+            <td>Driver Flexibility</td>
+            <td>Any driver version</td>
+            <td>Any driver version (per-VM independence)</td>
+            <td>Must match host driver version</td>
+          </tr>
+          <tr>
+            <td>Orchestration</td>
+            <td>MAAS, Foreman, manual</td>
+            <td>libvirt, KubeVirt, OpenStack</td>
+            <td>Kubernetes, Docker Swarm</td>
+          </tr>
+          <tr>
+            <td>Resource Overhead</td>
+            <td>None</td>
+            <td>~2-5% CPU, ~1-2 GB RAM per VM</td>
+            <td>Negligible</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-card">
+      <h4>When to Use Each Approach</h4>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-top: 0.75rem;">
+        <div class="callout callout-info" style="margin: 0;">
+          <strong>Use Bare Metal When:</strong>
+          <ul style="margin: 0.5rem 0 0 0; padding-left: 1.2rem;">
+            <li>Maximum GPU performance is critical (large-scale training)</li>
+            <li>Multi-node NVLink/NVSwitch topologies (DGX SuperPOD)</li>
+            <li>Single-tenant, dedicated infrastructure</li>
+            <li>GPUDirect RDMA with no abstraction overhead</li>
+          </ul>
+        </div>
+        <div class="callout callout-info" style="margin: 0;">
+          <strong>Use VMs (KVM + VFIO) When:</strong>
+          <ul style="margin: 0.5rem 0 0 0; padding-left: 1.2rem;">
+            <li>Strong multi-tenant isolation required (cloud providers)</li>
+            <li>Different OS or driver versions per tenant</li>
+            <li>Compliance requirements mandate VM-level separation</li>
+            <li>Legacy workloads need a full OS environment</li>
+          </ul>
+        </div>
+        <div class="callout callout-info" style="margin: 0;">
+          <strong>Use Containers When:</strong>
+          <ul style="margin: 0.5rem 0 0 0; padding-left: 1.2rem;">
+            <li>Rapid scaling and deployment (inference serving)</li>
+            <li>CI/CD pipelines and dev/test environments</li>
+            <li>Kubernetes-native orchestration desired</li>
+            <li>High density with MIG or time-slicing</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>Hybrid Pattern:</strong> In production Superpod deployments, a common hybrid pattern
+      is <strong>KubeVirt + NVIDIA GPU Operator</strong>: training jobs run as bare-metal Kubernetes
+      pods on nodes with full GPU passthrough via the NVIDIA device plugin, while inference and
+      multi-tenant workloads run inside KubeVirt VMs with MIG-backed vGPU slices &mdash; all managed
+      by the same Kubernetes control plane. This provides operational consistency while matching the
+      isolation model to each workload's requirements.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       QUIZ SECTION
+       ============================================================ -->
+  <div class="subsection quiz-section" id="virtualization-quiz">
+    <h3>Knowledge Check</h3>
+
+    <div class="quiz-question" data-question="virt-q1">
+      <h4>Question 1</h4>
+      <p>
+        An administrator wants to pass an NVIDIA H100 GPU to a QEMU/KVM virtual machine. They have
+        enabled IOMMU and identified the GPU at PCI address <code>41:00.0</code>, but when they
+        check the IOMMU group, they find another device (an audio controller at <code>41:00.1</code>)
+        in the same group. What must they do?
+      </p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="virt-q1" value="a" />
+          <span>Ignore the audio controller; VFIO only needs the GPU device.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q1" value="b" />
+          <span>Pass both devices (41:00.0 and 41:00.1) to the same VM, since all devices in an IOMMU group must be assigned together.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q1" value="c" />
+          <span>Move the audio controller to a different IOMMU group using <code>sysfs</code>.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q1" value="d" />
+          <span>Disable IOMMU entirely to avoid group conflicts.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" data-correct="b" style="display:none;">
+        <p>
+          <strong>Correct answer: B.</strong> All devices within an IOMMU group must be either assigned
+          to the same VM or all remain on the host. The IOMMU group represents the smallest unit of
+          isolation the hardware can enforce. NVIDIA GPUs commonly have an associated HDA (audio)
+          controller as a separate PCIe function on the same device (multi-function device), and both
+          must be passed through together. You cannot manually reassign IOMMU groups through sysfs
+          &mdash; they are determined by hardware topology and ACS capability.
+        </p>
+      </div>
+    </div>
+
+    <div class="quiz-question" data-question="virt-q2">
+      <h4>Question 2</h4>
+      <p>
+        A Kubernetes cluster operator has 4 NVIDIA H100 GPUs and needs to serve 20 concurrent
+        small inference models, each requiring approximately 8 GB of GPU memory and 14 SMs. The
+        models must have guaranteed performance isolation. Which approach is most appropriate?
+      </p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="virt-q2" value="a" />
+          <span>Use Kubernetes default GPU time-slicing with <code>nvidia.com/gpu: 1</code> and let 5 pods share each GPU.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q2" value="b" />
+          <span>Configure each H100 with MIG profile <code>1g.10gb</code> (7 instances per GPU), giving 28 total MIG slices, and request <code>nvidia.com/mig-1g.10gb: 1</code> per pod.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q2" value="c" />
+          <span>Use NVIDIA vGPU with 5 time-sliced vGPU instances per GPU.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q2" value="d" />
+          <span>Pass each full GPU to a separate VM and run 5 containers per VM.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" data-correct="b" style="display:none;">
+        <p>
+          <strong>Correct answer: B.</strong> MIG with the <code>1g.10gb</code> profile on H100
+          provides 7 instances per GPU (28 total across 4 GPUs), exceeding the 20-pod requirement.
+          Each 1g.10gb instance provides 16 SMs and 10 GB of HBM3 memory, meeting the workload's
+          needs of ~14 SMs and ~8 GB. MIG provides hardware-level isolation (dedicated SMs, memory,
+          and L2 cache), satisfying the guaranteed performance isolation requirement. Time-slicing
+          (option A) does not provide isolation. vGPU (option C) requires additional licensing and
+          has higher overhead for container-native workloads. Option D adds unnecessary VM overhead.
+        </p>
+      </div>
+    </div>
+
+    <div class="quiz-question" data-question="virt-q3">
+      <h4>Question 3</h4>
+      <p>
+        What is the primary difference between SR-IOV Virtual Functions and NVIDIA vGPU mdev
+        (mediated) devices?
+      </p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="virt-q3" value="a" />
+          <span>SR-IOV VFs are software-emulated, while mdev devices are hardware-partitioned.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q3" value="b" />
+          <span>SR-IOV VFs are independent hardware-instantiated PCIe functions with their own BARs and queues, while mdev devices are mediated by a host driver that multiplexes access to a single physical function.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q3" value="c" />
+          <span>There is no difference; SR-IOV and mdev are two names for the same VFIO mechanism.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="virt-q3" value="d" />
+          <span>SR-IOV only works with network cards, while mdev only works with GPUs.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" data-correct="b" style="display:none;">
+        <p>
+          <strong>Correct answer: B.</strong> SR-IOV Virtual Functions are true hardware-level PCIe
+          functions created by the device itself. Each VF has its own PCIe configuration space, BAR
+          registers, MSI-X vectors, and hardware queue pairs. The device's internal logic routes I/O
+          to the correct VF without host software involvement on the data path.
+        </p>
+        <p>
+          In contrast, mdev (mediated devices) are a software framework where the host driver
+          (e.g., NVIDIA vGPU Manager) intercepts and multiplexes guest access to a single physical
+          device. The mdev device presented to the VM looks like a VFIO device, but behind the
+          scenes, the host driver manages scheduling, memory partitioning, and context switching.
+          This is why mdev-based vGPU requires a special host driver and license, while SR-IOV VFs
+          work with the standard in-tree kernel driver.
+        </p>
+      </div>
+    </div>
+  </div>
+
+</section>

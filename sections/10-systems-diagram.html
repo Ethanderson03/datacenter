@@ -1,0 +1,630 @@
+<section id="systems-diagram" class="content-section" data-layer="all">
+
+  <h2 class="section-title"><span class="layer-badge" data-layer="all">ALL</span> Full-Stack Systems Diagram</h2>
+  <p class="section-subtitle">An interactive, layer-by-layer view of every component in an NVIDIA DGX SuperPOD datacenter — from utility power to Kubernetes orchestration.</p>
+
+  <div class="info-card">
+    <strong>How to use:</strong> Hover over any component for a tooltip. Click to see details. Use the layer filters to isolate specific layers.
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem;" id="layer-filter-bar">
+    <button class="tab-btn active" onclick="filterDiagramLayer('all',this)">All Layers</button>
+    <button class="tab-btn" onclick="filterDiagramLayer('physical',this)">L0 Physical</button>
+    <button class="tab-btn" onclick="filterDiagramLayer('hardware',this)">L1 Hardware</button>
+    <button class="tab-btn" onclick="filterDiagramLayer('network',this)">L2-3 Network</button>
+    <button class="tab-btn" onclick="filterDiagramLayer('storage',this)">L5 Storage</button>
+    <button class="tab-btn" onclick="filterDiagramLayer('orchestration',this)">L6-7 Ops</button>
+  </div>
+
+  <!-- ========== MAIN SVG DIAGRAM ========== -->
+  <div class="diagram-container" style="overflow-x:auto;border:1px solid var(--border-color,#333);border-radius:8px;background:#080c16;padding:1rem;">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1900" width="100%" style="min-width:800px;font-family:'Inter',system-ui,sans-serif;">
+      <defs>
+        <linearGradient id="g-phys" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a0a0a"/><stop offset="100%" stop-color="#1a1225"/></linearGradient>
+        <linearGradient id="g-hw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a1a00"/><stop offset="100%" stop-color="#1a1a2e"/></linearGradient>
+        <linearGradient id="g-net" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#001a10"/><stop offset="100%" stop-color="#0a1a30"/></linearGradient>
+        <linearGradient id="g-edge" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0a0a2e"/><stop offset="100%" stop-color="#001a20"/></linearGradient>
+        <linearGradient id="g-orch" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0a1520"/><stop offset="100%" stop-color="#0a0a2e"/></linearGradient>
+        <filter id="glow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#666"/></marker>
+        <marker id="arr-ib" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#b44dff"/></marker>
+        <marker id="arr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#00c853"/></marker>
+        <marker id="arr-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4d96ff"/></marker>
+      </defs>
+
+      <!-- ===== LAYER 0: PHYSICAL INFRASTRUCTURE (bottom) ===== -->
+      <g class="diagram-layer" data-layer="physical">
+        <rect x="15" y="1580" width="1070" height="290" rx="8" fill="url(#g-phys)" stroke="#ff6b6b" stroke-width="1.5" opacity="0.9"/>
+        <text x="30" y="1608" fill="#ff6b6b" font-size="13" font-weight="700" letter-spacing="1">LAYER 0 — PHYSICAL INFRASTRUCTURE</text>
+
+        <!-- Utility Power -->
+        <g class="diagram-node" data-component="utility" data-info="Dual utility feeds from separate substations, 13.8kV medium voltage">
+          <rect x="40" y="1630" width="130" height="50" rx="5" fill="#1c1020" stroke="#ff6b6b" stroke-width="1.2"/>
+          <text x="105" y="1650" fill="#ff8a8a" font-size="10" font-weight="600" text-anchor="middle">Utility Feed A</text>
+          <text x="105" y="1665" fill="#cc6666" font-size="8" text-anchor="middle">13.8kV / 10MW+</text>
+        </g>
+        <g class="diagram-node" data-component="utility-b" data-info="Secondary utility feed for 2N redundancy">
+          <rect x="40" y="1695" width="130" height="50" rx="5" fill="#1c1020" stroke="#ff6b6b" stroke-width="1.2"/>
+          <text x="105" y="1715" fill="#ff8a8a" font-size="10" font-weight="600" text-anchor="middle">Utility Feed B</text>
+          <text x="105" y="1730" fill="#cc6666" font-size="8" text-anchor="middle">13.8kV / 10MW+</text>
+        </g>
+
+        <!-- ATS -->
+        <line x1="170" y1="1655" x2="210" y2="1700" stroke="#ff6b6b" stroke-width="1" marker-end="url(#arr)"/>
+        <line x1="170" y1="1720" x2="210" y2="1700" stroke="#ff6b6b" stroke-width="1" marker-end="url(#arr)"/>
+        <g class="diagram-node" data-component="ats" data-info="Automatic Transfer Switch: switches between utility feeds in <10ms, feeds UPS">
+          <rect x="210" y="1680" width="100" height="44" rx="5" fill="#1c1020" stroke="#ff9a3c" stroke-width="1.2"/>
+          <text x="260" y="1700" fill="#ffaa55" font-size="10" font-weight="600" text-anchor="middle">ATS</text>
+          <text x="260" y="1714" fill="#cc8833" font-size="7" text-anchor="middle">Auto Transfer</text>
+        </g>
+
+        <!-- Generator -->
+        <g class="diagram-node" data-component="generator" data-info="Diesel generators: 2MW+ each, 10s startup, N+1 redundancy, 48hr fuel">
+          <rect x="210" y="1740" width="100" height="44" rx="5" fill="#1c1020" stroke="#ffaa00" stroke-width="1.2"/>
+          <text x="260" y="1760" fill="#ffcc44" font-size="10" font-weight="600" text-anchor="middle">Generators</text>
+          <text x="260" y="1773" fill="#cc9933" font-size="7" text-anchor="middle">Diesel N+1</text>
+        </g>
+        <line x1="260" y1="1740" x2="260" y2="1724" stroke="#ffaa00" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- UPS -->
+        <line x1="310" y1="1702" x2="350" y2="1702" stroke="#ff6b6b" stroke-width="1" marker-end="url(#arr)"/>
+        <g class="diagram-node" data-component="ups" data-info="UPS systems: 10-15 min runtime, rotary or lithium-ion battery, bridges to generator">
+          <rect x="350" y="1680" width="100" height="44" rx="5" fill="#1c1020" stroke="#ff6b6b" stroke-width="1.2"/>
+          <text x="400" y="1700" fill="#ff8a8a" font-size="10" font-weight="600" text-anchor="middle">UPS</text>
+          <text x="400" y="1714" fill="#cc6666" font-size="7" text-anchor="middle">2N / 10-15 min</text>
+        </g>
+
+        <!-- PDUs -->
+        <line x1="450" y1="1702" x2="490" y2="1702" stroke="#ff6b6b" stroke-width="1" marker-end="url(#arr)"/>
+        <g class="diagram-node" data-component="pdu" data-info="Rack PDUs: metered/switched, 3-phase 208V, A+B feeds per rack, 60-100kW per GPU rack">
+          <rect x="490" y="1680" width="110" height="44" rx="5" fill="#1c1020" stroke="#ff6b6b" stroke-width="1.2"/>
+          <text x="545" y="1700" fill="#ff8a8a" font-size="10" font-weight="600" text-anchor="middle">Rack PDUs</text>
+          <text x="545" y="1714" fill="#cc6666" font-size="7" text-anchor="middle">A+B / 60-100kW</text>
+        </g>
+
+        <!-- Cooling -->
+        <g class="diagram-node" data-component="chiller" data-info="Chiller plant: water-cooled chillers, cooling towers, primary loop 7°C supply">
+          <rect x="680" y="1630" width="130" height="50" rx="5" fill="#1c1020" stroke="#4dd0e1" stroke-width="1.2"/>
+          <text x="745" y="1650" fill="#4dd0e1" font-size="10" font-weight="600" text-anchor="middle">Chiller Plant</text>
+          <text x="745" y="1665" fill="#339da8" font-size="8" text-anchor="middle">7°C supply water</text>
+        </g>
+        <line x1="745" y1="1680" x2="745" y2="1700" stroke="#4dd0e1" stroke-width="1" marker-end="url(#arr)"/>
+        <g class="diagram-node" data-component="cdu" data-info="CDU (Coolant Distribution Unit): secondary loop, provides liquid cooling to racks, 32-40°C supply to cold plates">
+          <rect x="680" y="1700" width="130" height="50" rx="5" fill="#1c1020" stroke="#4dd0e1" stroke-width="1.2"/>
+          <text x="745" y="1720" fill="#4dd0e1" font-size="10" font-weight="600" text-anchor="middle">CDU</text>
+          <text x="745" y="1735" fill="#339da8" font-size="8" text-anchor="middle">Liquid to racks</text>
+        </g>
+        <line x1="810" y1="1725" x2="870" y2="1725" stroke="#4dd0e1" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="840" y="1718" fill="#339da8" font-size="7" text-anchor="middle">cold plates</text>
+
+        <!-- Facility -->
+        <g class="diagram-node" data-component="facility" data-info="Datacenter facility: Tier III/IV, SOC2, ISO27001, FM-200 fire suppression, mantraps">
+          <rect x="870" y="1680" width="190" height="80" rx="5" fill="#1c1020" stroke="#ff6b6b" stroke-width="1.2"/>
+          <text x="965" y="1705" fill="#ff8a8a" font-size="10" font-weight="600" text-anchor="middle">Datacenter Facility</text>
+          <text x="965" y="1720" fill="#cc6666" font-size="8" text-anchor="middle">Tier III/IV | PUE &lt; 1.3</text>
+          <text x="965" y="1733" fill="#cc6666" font-size="8" text-anchor="middle">Fire: FM-200/Novec</text>
+          <text x="965" y="1746" fill="#cc6666" font-size="8" text-anchor="middle">Physical security: biometrics</text>
+        </g>
+
+        <!-- Power flow label -->
+        <text x="340" y="1840" fill="#884444" font-size="9" text-anchor="middle">Utility → ATS → UPS → PDU → Rack (power path)</text>
+        <text x="760" y="1840" fill="#337788" font-size="9" text-anchor="middle">Chiller → CDU → Cold Plates → GPU/CPU (cooling path)</text>
+      </g>
+
+      <!-- ===== LAYER 1: HARDWARE ===== -->
+      <g class="diagram-layer" data-layer="hardware">
+        <rect x="15" y="1240" width="1070" height="320" rx="8" fill="url(#g-hw)" stroke="#ffd93d" stroke-width="1.5" opacity="0.9"/>
+        <text x="30" y="1268" fill="#ffd93d" font-size="13" font-weight="700" letter-spacing="1">LAYER 1 — HARDWARE (DGX SuperPOD: 4 Racks × 8 DGX H100 = 256 GPUs)</text>
+
+        <!-- 4 Racks -->
+        <!-- Rack 1 -->
+        <g class="diagram-node" data-component="dgx-rack" data-info="42U IT Rack: 8× DGX H100 nodes, A+B PDU feeds, liquid cooled, ~80kW per rack">
+          <rect x="40" y="1290" width="230" height="240" rx="6" fill="#1a1800" stroke="#ffd93d" stroke-width="1"/>
+          <text x="155" y="1310" fill="#ffd93d" font-size="10" font-weight="700" text-anchor="middle">Rack 1 (42U)</text>
+          <!-- DGX nodes inside -->
+          <g>
+            <rect x="55" y="1320" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1335" fill="#e0c840" font-size="8">DGX-1: 8×H100 | 10.2kW | 640GB HBM3</text>
+          </g>
+          <g>
+            <rect x="55" y="1346" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1361" fill="#e0c840" font-size="8">DGX-2: 8×H100 | 10.2kW | 640GB HBM3</text>
+          </g>
+          <g>
+            <rect x="55" y="1372" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1387" fill="#e0c840" font-size="8">DGX-3: 8×H100 | ConnectX-7 ×8</text>
+          </g>
+          <g>
+            <rect x="55" y="1398" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1413" fill="#e0c840" font-size="8">DGX-4: 8×H100 | NVSwitch ×4</text>
+          </g>
+          <g>
+            <rect x="55" y="1424" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1439" fill="#e0c840" font-size="8">DGX-5: 8×H100 | BlueField-3 ×2</text>
+          </g>
+          <g>
+            <rect x="55" y="1450" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1465" fill="#c0a830" font-size="8">DGX-6 ···</text>
+          </g>
+          <g>
+            <rect x="55" y="1476" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1491" fill="#c0a830" font-size="8">DGX-7 ···</text>
+          </g>
+          <g>
+            <rect x="55" y="1502" width="200" height="22" rx="3" fill="#2a2800" stroke="#b8a020" stroke-width="0.8"/>
+            <text x="70" y="1517" fill="#c0a830" font-size="8">DGX-8 ···</text>
+          </g>
+        </g>
+
+        <!-- Rack 2 -->
+        <g class="diagram-node" data-component="dgx-rack" data-info="Rack 2: 8× DGX H100 nodes, 64 GPUs, 8× NVSwitch per DGX for all-to-all GPU connectivity">
+          <rect x="290" y="1290" width="230" height="240" rx="6" fill="#1a1800" stroke="#ffd93d" stroke-width="1"/>
+          <text x="405" y="1310" fill="#ffd93d" font-size="10" font-weight="700" text-anchor="middle">Rack 2 (42U)</text>
+          <rect x="305" y="1320" width="200" height="195" rx="3" fill="#222000" stroke="#b8a020" stroke-width="0.5"/>
+          <text x="405" y="1420" fill="#c0a830" font-size="11" text-anchor="middle">8× DGX H100</text>
+          <text x="405" y="1438" fill="#998830" font-size="9" text-anchor="middle">64 GPUs | ~82 kW</text>
+          <text x="405" y="1453" fill="#998830" font-size="8" text-anchor="middle">8× ConnectX-7 per node (400G IB)</text>
+        </g>
+
+        <!-- Rack 3 -->
+        <g class="diagram-node" data-component="dgx-rack" data-info="Rack 3: 8× DGX H100, identical config, rail-optimized networking">
+          <rect x="540" y="1290" width="230" height="240" rx="6" fill="#1a1800" stroke="#ffd93d" stroke-width="1"/>
+          <text x="655" y="1310" fill="#ffd93d" font-size="10" font-weight="700" text-anchor="middle">Rack 3 (42U)</text>
+          <rect x="555" y="1320" width="200" height="195" rx="3" fill="#222000" stroke="#b8a020" stroke-width="0.5"/>
+          <text x="655" y="1420" fill="#c0a830" font-size="11" text-anchor="middle">8× DGX H100</text>
+          <text x="655" y="1438" fill="#998830" font-size="9" text-anchor="middle">64 GPUs | ~82 kW</text>
+        </g>
+
+        <!-- Rack 4 -->
+        <g class="diagram-node" data-component="dgx-rack" data-info="Rack 4: 8× DGX H100, total SuperPOD = 32 DGX nodes = 256 GPUs">
+          <rect x="790" y="1290" width="230" height="240" rx="6" fill="#1a1800" stroke="#ffd93d" stroke-width="1"/>
+          <text x="905" y="1310" fill="#ffd93d" font-size="10" font-weight="700" text-anchor="middle">Rack 4 (42U)</text>
+          <rect x="805" y="1320" width="200" height="195" rx="3" fill="#222000" stroke="#b8a020" stroke-width="0.5"/>
+          <text x="905" y="1420" fill="#c0a830" font-size="11" text-anchor="middle">8× DGX H100</text>
+          <text x="905" y="1438" fill="#998830" font-size="9" text-anchor="middle">64 GPUs | ~82 kW</text>
+        </g>
+
+        <!-- Power connections from PDU layer -->
+        <line x1="545" y1="1580" x2="155" y2="1530" stroke="#ff6b6b" stroke-width="0.8" stroke-dasharray="4,4" opacity="0.5"/>
+        <line x1="545" y1="1580" x2="405" y2="1530" stroke="#ff6b6b" stroke-width="0.8" stroke-dasharray="4,4" opacity="0.5"/>
+        <line x1="545" y1="1580" x2="655" y2="1530" stroke="#ff6b6b" stroke-width="0.8" stroke-dasharray="4,4" opacity="0.5"/>
+        <line x1="545" y1="1580" x2="905" y2="1530" stroke="#ff6b6b" stroke-width="0.8" stroke-dasharray="4,4" opacity="0.5"/>
+      </g>
+
+      <!-- ===== LAYER 2-3: NETWORK FABRIC ===== -->
+      <g class="diagram-layer" data-layer="network">
+        <rect x="15" y="760" width="1070" height="460" rx="8" fill="url(#g-net)" stroke="#6bcb77" stroke-width="1.5" opacity="0.9"/>
+        <text x="30" y="788" fill="#6bcb77" font-size="13" font-weight="700" letter-spacing="1">LAYERS 2-3 — NETWORK FABRIC (InfiniBand + Ethernet)</text>
+
+        <!-- Leaf Switches (ToR) - InfiniBand -->
+        <text x="30" y="830" fill="#b44dff" font-size="10" font-weight="600">InfiniBand Compute Fabric (NDR 400G) — East-West Traffic</text>
+
+        <g class="diagram-node" data-component="ib-leaf" data-info="IB Leaf Switch (ToR): Quantum-2 QM9700, 64×400G NDR ports, connects 8 DGX nodes per rack">
+          <rect x="55" y="845" width="190" height="40" rx="5" fill="#180830" stroke="#b44dff" stroke-width="1.2"/>
+          <text x="150" y="870" fill="#d088ff" font-size="10" font-weight="600" text-anchor="middle">IB Leaf 1 (QM9700)</text>
+        </g>
+        <g class="diagram-node" data-component="ib-leaf" data-info="IB Leaf Switch: 64×NDR 400G ports, connects DGX ConnectX-7 NICs to spine">
+          <rect x="295" y="845" width="190" height="40" rx="5" fill="#180830" stroke="#b44dff" stroke-width="1.2"/>
+          <text x="390" y="870" fill="#d088ff" font-size="10" font-weight="600" text-anchor="middle">IB Leaf 2 (QM9700)</text>
+        </g>
+        <g class="diagram-node" data-component="ib-leaf" data-info="IB Leaf Switch: rail-optimized — each rail has its own leaf switch for ECMP">
+          <rect x="535" y="845" width="190" height="40" rx="5" fill="#180830" stroke="#b44dff" stroke-width="1.2"/>
+          <text x="630" y="870" fill="#d088ff" font-size="10" font-weight="600" text-anchor="middle">IB Leaf 3 (QM9700)</text>
+        </g>
+        <g class="diagram-node" data-component="ib-leaf" data-info="IB Leaf Switch: all leaves connect to all spines for full bisection bandwidth">
+          <rect x="775" y="845" width="190" height="40" rx="5" fill="#180830" stroke="#b44dff" stroke-width="1.2"/>
+          <text x="870" y="870" fill="#d088ff" font-size="10" font-weight="600" text-anchor="middle">IB Leaf 4 (QM9700)</text>
+        </g>
+
+        <!-- Leaf to Rack connections (IB) -->
+        <line x1="150" y1="885" x2="155" y2="1240" stroke="#b44dff" stroke-width="1.5" opacity="0.6"/>
+        <line x1="390" y1="885" x2="405" y2="1240" stroke="#b44dff" stroke-width="1.5" opacity="0.6"/>
+        <line x1="630" y1="885" x2="655" y2="1240" stroke="#b44dff" stroke-width="1.5" opacity="0.6"/>
+        <line x1="870" y1="885" x2="905" y2="1240" stroke="#b44dff" stroke-width="1.5" opacity="0.6"/>
+
+        <!-- IB Spine Switches -->
+        <g class="diagram-node" data-component="ib-spine" data-info="IB Spine Switch: Quantum-2 QM9700, connects all leaf switches, provides full bisection bandwidth across SuperPOD">
+          <rect x="170" y="920" width="300" height="44" rx="5" fill="#200a40" stroke="#9933ff" stroke-width="1.5" filter="url(#glow)"/>
+          <text x="320" y="947" fill="#cc88ff" font-size="11" font-weight="700" text-anchor="middle">IB Spine 1 (Quantum-2 QM9700) — 64×400G</text>
+        </g>
+        <g class="diagram-node" data-component="ib-spine" data-info="IB Spine 2: redundant spine, all leaves dual-homed to both spines for HA">
+          <rect x="530" y="920" width="300" height="44" rx="5" fill="#200a40" stroke="#9933ff" stroke-width="1.5" filter="url(#glow)"/>
+          <text x="680" y="947" fill="#cc88ff" font-size="11" font-weight="700" text-anchor="middle">IB Spine 2 (Quantum-2 QM9700) — 64×400G</text>
+        </g>
+
+        <!-- Leaf to Spine connections -->
+        <line x1="150" y1="845" x2="270" y2="920" stroke="#b44dff" stroke-width="1" opacity="0.5"/>
+        <line x1="390" y1="845" x2="350" y2="920" stroke="#b44dff" stroke-width="1" opacity="0.5"/>
+        <line x1="630" y1="845" x2="630" y2="920" stroke="#b44dff" stroke-width="1" opacity="0.5"/>
+        <line x1="870" y1="845" x2="730" y2="920" stroke="#b44dff" stroke-width="1" opacity="0.5"/>
+        <line x1="150" y1="845" x2="580" y2="920" stroke="#b44dff" stroke-width="0.6" opacity="0.3"/>
+        <line x1="390" y1="845" x2="630" y2="920" stroke="#b44dff" stroke-width="0.6" opacity="0.3"/>
+        <line x1="630" y1="845" x2="370" y2="920" stroke="#b44dff" stroke-width="0.6" opacity="0.3"/>
+        <line x1="870" y1="845" x2="780" y2="920" stroke="#b44dff" stroke-width="0.6" opacity="0.3"/>
+
+        <!-- East-West label -->
+        <text x="550" y="988" fill="#b44dff" font-size="9" text-anchor="middle" opacity="0.7">← East-West: GPU-to-GPU traffic (NCCL AllReduce) — full bisection bandwidth →</text>
+
+        <!-- Ethernet Fabric -->
+        <text x="30" y="1020" fill="#4d96ff" font-size="10" font-weight="600">Ethernet Management + Storage Fabric (100/400GbE) — North-South + Storage</text>
+
+        <g class="diagram-node" data-component="eth-leaf" data-info="Ethernet Leaf (ToR): Spectrum-4 SN5600, 100/400GbE, handles management, storage, and out-of-band traffic">
+          <rect x="55" y="1035" width="220" height="40" rx="5" fill="#0a1530" stroke="#4d96ff" stroke-width="1.2"/>
+          <text x="165" y="1060" fill="#80b0ff" font-size="10" font-weight="600" text-anchor="middle">Eth Leaf 1 (SN5600) 400GbE</text>
+        </g>
+        <g class="diagram-node" data-component="eth-leaf" data-info="Ethernet Leaf 2: connects to storage network (NFS/Lustre/Weka), and management plane">
+          <rect x="325" y="1035" width="220" height="40" rx="5" fill="#0a1530" stroke="#4d96ff" stroke-width="1.2"/>
+          <text x="435" y="1060" fill="#80b0ff" font-size="10" font-weight="600" text-anchor="middle">Eth Leaf 2 (SN5600) 400GbE</text>
+        </g>
+        <g class="diagram-node" data-component="eth-leaf" data-info="Ethernet Leaf 3: LACP/MLAG for redundant connectivity">
+          <rect x="595" y="1035" width="220" height="40" rx="5" fill="#0a1530" stroke="#4d96ff" stroke-width="1.2"/>
+          <text x="705" y="1060" fill="#80b0ff" font-size="10" font-weight="600" text-anchor="middle">Eth Leaf 3 (SN5600) 400GbE</text>
+        </g>
+
+        <!-- Ethernet Spine -->
+        <g class="diagram-node" data-component="eth-spine" data-info="Ethernet Spine: connects all Ethernet leaves, routes N-S traffic to border, BGP eBGP as IGP">
+          <rect x="250" y="1100" width="400" height="44" rx="5" fill="#0a1a40" stroke="#3380ff" stroke-width="1.5"/>
+          <text x="450" y="1127" fill="#80b0ff" font-size="11" font-weight="700" text-anchor="middle">Eth Spine (SN5600) — BGP eBGP | ECMP | MLAG</text>
+        </g>
+
+        <line x1="165" y1="1075" x2="350" y2="1100" stroke="#4d96ff" stroke-width="1" opacity="0.5"/>
+        <line x1="435" y1="1075" x2="450" y2="1100" stroke="#4d96ff" stroke-width="1" opacity="0.5"/>
+        <line x1="705" y1="1075" x2="550" y2="1100" stroke="#4d96ff" stroke-width="1" opacity="0.5"/>
+
+        <!-- Eth leaf to racks -->
+        <line x1="165" y1="1075" x2="155" y2="1240" stroke="#4d96ff" stroke-width="0.8" opacity="0.3" stroke-dasharray="4,4"/>
+        <line x1="435" y1="1075" x2="405" y2="1240" stroke="#4d96ff" stroke-width="0.8" opacity="0.3" stroke-dasharray="4,4"/>
+        <line x1="705" y1="1075" x2="655" y2="1240" stroke="#4d96ff" stroke-width="0.8" opacity="0.3" stroke-dasharray="4,4"/>
+
+        <!-- Storage Network -->
+        <text x="30" y="1170" fill="#00c853" font-size="10" font-weight="600">Storage Fabric (dedicated 200GbE or IB)</text>
+        <g class="diagram-node" data-component="storage-switch" data-info="Dedicated storage network switches: connects Lustre/Weka OSS/MDS to compute via BlueField DPUs">
+          <rect x="55" y="1180" width="340" height="36" rx="5" fill="#0a200a" stroke="#00c853" stroke-width="1.2"/>
+          <text x="225" y="1203" fill="#44e088" font-size="10" font-weight="600" text-anchor="middle">Storage Network Switches — 200GbE / NVMe-oF RDMA</text>
+        </g>
+      </g>
+
+      <!-- ===== LAYER 3: EDGE / NORTH-SOUTH ===== -->
+      <g class="diagram-layer" data-layer="network">
+        <rect x="15" y="430" width="1070" height="310" rx="8" fill="url(#g-edge)" stroke="#4d96ff" stroke-width="1.5" opacity="0.9"/>
+        <text x="30" y="458" fill="#4d96ff" font-size="13" font-weight="700" letter-spacing="1">LAYER 3 — NORTH-SOUTH EDGE (BGP, Blended ISP, Redundancy)</text>
+
+        <!-- Border Routers -->
+        <g class="diagram-node" data-component="border-router" data-info="Border Router A: eBGP peering with ISP A, DDoS scrubbing, ACLs, 10-100G uplinks">
+          <rect x="200" y="475" width="200" height="50" rx="5" fill="#0a0a30" stroke="#4d96ff" stroke-width="1.5"/>
+          <text x="300" y="497" fill="#80b0ff" font-size="11" font-weight="700" text-anchor="middle">Border Router A</text>
+          <text x="300" y="512" fill="#5580bb" font-size="8" text-anchor="middle">eBGP AS 65000 | BFD | ECMP</text>
+        </g>
+        <g class="diagram-node" data-component="border-router" data-info="Border Router B: eBGP peering with ISP B, active-active multi-homed, BGP communities">
+          <rect x="600" y="475" width="200" height="50" rx="5" fill="#0a0a30" stroke="#4d96ff" stroke-width="1.5"/>
+          <text x="700" y="497" fill="#80b0ff" font-size="11" font-weight="700" text-anchor="middle">Border Router B</text>
+          <text x="700" y="512" fill="#5580bb" font-size="8" text-anchor="middle">eBGP AS 65000 | BFD | ECMP</text>
+        </g>
+
+        <!-- ISP connections -->
+        <line x1="300" y1="475" x2="300" y2="430" stroke="#4d96ff" stroke-width="2" marker-end="url(#arr-b)"/>
+        <line x1="700" y1="475" x2="700" y2="430" stroke="#4d96ff" stroke-width="2" marker-end="url(#arr-b)"/>
+        <text x="240" y="445" fill="#4d96ff" font-size="10" font-weight="600">ISP A (Transit)</text>
+        <text x="640" y="445" fill="#4d96ff" font-size="10" font-weight="600">ISP B (Transit)</text>
+        <text x="500" y="445" fill="#3366aa" font-size="9" text-anchor="middle">Blended Transit / Multi-homed</text>
+
+        <!-- Firewalls -->
+        <g class="diagram-node" data-component="firewall" data-info="Firewall: stateful inspection, DDoS mitigation, ACLs, zone-based policies, HA pair">
+          <rect x="350" y="545" width="200" height="44" rx="5" fill="#0a0a30" stroke="#ff4444" stroke-width="1.2"/>
+          <text x="450" y="565" fill="#ff6666" font-size="11" font-weight="700" text-anchor="middle">Firewall HA Pair</text>
+          <text x="450" y="579" fill="#aa3333" font-size="8" text-anchor="middle">Stateful | DDoS | Zone-based</text>
+        </g>
+
+        <line x1="300" y1="525" x2="400" y2="545" stroke="#4d96ff" stroke-width="1" marker-end="url(#arr)"/>
+        <line x1="700" y1="525" x2="500" y2="545" stroke="#4d96ff" stroke-width="1" marker-end="url(#arr)"/>
+
+        <!-- Load Balancers -->
+        <g class="diagram-node" data-component="load-balancer" data-info="Load Balancer: L4 (TCP/UDP) + L7 (HTTP/gRPC), health checks, TLS termination, MetalLB in K8s">
+          <rect x="350" y="610" width="200" height="44" rx="5" fill="#0a0a30" stroke="#00ff88" stroke-width="1.2"/>
+          <text x="450" y="630" fill="#44ffaa" font-size="11" font-weight="700" text-anchor="middle">Load Balancer</text>
+          <text x="450" y="644" fill="#22aa66" font-size="8" text-anchor="middle">L4/L7 | TLS | Health Checks</text>
+        </g>
+        <line x1="450" y1="589" x2="450" y2="610" stroke="#4d96ff" stroke-width="1" marker-end="url(#arr)"/>
+
+        <!-- North-South arrow to Eth Spine -->
+        <line x1="450" y1="654" x2="450" y2="760" stroke="#4d96ff" stroke-width="1.5" marker-end="url(#arr-b)"/>
+        <text x="462" y="710" fill="#3366aa" font-size="9" transform="rotate(-90 462 710)">North-South</text>
+
+        <!-- DDoS scrubbing -->
+        <g class="diagram-node" data-component="ddos" data-info="DDoS Scrubbing: upstream provider (Cloudflare/Akamai) or on-prem appliance, BGP route injection">
+          <rect x="780" y="545" width="190" height="44" rx="5" fill="#0a0a30" stroke="#ffaa00" stroke-width="1.2"/>
+          <text x="875" y="565" fill="#ffcc44" font-size="10" font-weight="600" text-anchor="middle">DDoS Scrubbing</text>
+          <text x="875" y="579" fill="#aa8822" font-size="8" text-anchor="middle">Cloudflare / Akamai</text>
+        </g>
+        <line x1="700" y1="525" x2="820" y2="545" stroke="#ffaa00" stroke-width="0.8" stroke-dasharray="4,3"/>
+
+        <!-- VRRP/Anycast label -->
+        <text x="450" y="700" fill="#4d96ff" font-size="9" text-anchor="middle" opacity="0.7">Anycast Gateway | VRRP | Active-Active Redundancy</text>
+      </g>
+
+      <!-- ===== STORAGE SERVERS (alongside network layer) ===== -->
+      <g class="diagram-layer" data-layer="storage">
+        <g class="diagram-node" data-component="storage-cluster" data-info="Storage Cluster: Lustre/WekaFS — MDS for metadata, OSS for objects, NVMe-oF over RDMA, petabyte-scale">
+          <rect x="700" y="1100" width="370" height="120" rx="6" fill="#0a200a" stroke="#00c853" stroke-width="1.5"/>
+          <text x="885" y="1125" fill="#44e088" font-size="12" font-weight="700" text-anchor="middle">Storage Cluster (Lustre / WekaFS)</text>
+
+          <rect x="720" y="1140" width="80" height="30" rx="3" fill="#0a300a" stroke="#00c853" stroke-width="0.8"/>
+          <text x="760" y="1159" fill="#33cc66" font-size="9" text-anchor="middle">MDS ×2</text>
+
+          <rect x="810" y="1140" width="80" height="30" rx="3" fill="#0a300a" stroke="#00c853" stroke-width="0.8"/>
+          <text x="850" y="1159" fill="#33cc66" font-size="9" text-anchor="middle">OSS ×8</text>
+
+          <rect x="900" y="1140" width="80" height="30" rx="3" fill="#0a300a" stroke="#00c853" stroke-width="0.8"/>
+          <text x="940" y="1159" fill="#33cc66" font-size="9" text-anchor="middle">NVMe ×48</text>
+
+          <rect x="990" y="1140" width="60" height="30" rx="3" fill="#0a300a" stroke="#00c853" stroke-width="0.8"/>
+          <text x="1020" y="1159" fill="#33cc66" font-size="9" text-anchor="middle">S3/NAS</text>
+
+          <text x="885" y="1195" fill="#228844" font-size="8" text-anchor="middle">NVMe-oF / RDMA | 200Gb/s per OSS | Petabyte-scale</text>
+          <text x="885" y="1208" fill="#228844" font-size="8" text-anchor="middle">GPUDirect Storage: NVMe → GPU memory (bypass CPU)</text>
+        </g>
+        <line x1="395" y1="1198" x2="700" y2="1160" stroke="#00c853" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+      </g>
+
+      <!-- ===== LAYER 6-7: ORCHESTRATION & MONITORING (top) ===== -->
+      <g class="diagram-layer" data-layer="orchestration">
+        <rect x="15" y="30" width="1070" height="380" rx="8" fill="url(#g-orch)" stroke="#1abc9c" stroke-width="1.5" opacity="0.9"/>
+        <text x="30" y="58" fill="#1abc9c" font-size="13" font-weight="700" letter-spacing="1">LAYERS 6-7 — ORCHESTRATION & MONITORING</text>
+
+        <!-- K8s Control Plane -->
+        <g class="diagram-node" data-component="k8s-control" data-info="K8s Control Plane: API server (TCP 6443), etcd (TCP 2379), scheduler, controller-manager. HA with 3+ masters">
+          <rect x="40" y="75" width="280" height="80" rx="6" fill="#0a1a25" stroke="#1abc9c" stroke-width="1.5"/>
+          <text x="180" y="97" fill="#2ee0b8" font-size="12" font-weight="700" text-anchor="middle">Kubernetes Control Plane</text>
+          <rect x="55" y="108" width="72" height="30" rx="3" fill="#061520" stroke="#1abc9c" stroke-width="0.8"/>
+          <text x="91" y="127" fill="#80e0cc" font-size="9" text-anchor="middle">API Server</text>
+          <rect x="133" y="108" width="55" height="30" rx="3" fill="#061520" stroke="#1abc9c" stroke-width="0.8"/>
+          <text x="161" y="127" fill="#80e0cc" font-size="9" text-anchor="middle">etcd</text>
+          <rect x="194" y="108" width="55" height="30" rx="3" fill="#061520" stroke="#1abc9c" stroke-width="0.8"/>
+          <text x="222" y="127" fill="#80e0cc" font-size="9" text-anchor="middle">Sched</text>
+          <rect x="255" y="108" width="55" height="30" rx="3" fill="#061520" stroke="#1abc9c" stroke-width="0.8"/>
+          <text x="283" y="127" fill="#80e0cc" font-size="9" text-anchor="middle">CM</text>
+        </g>
+
+        <!-- Monitoring Stack -->
+        <g class="diagram-node" data-component="monitoring" data-info="Monitoring: Prometheus (TCP 9090) scrapes DCGM/node metrics, Grafana (TCP 3000) dashboards, AlertManager → PagerDuty">
+          <rect x="350" y="75" width="320" height="80" rx="6" fill="#0a1a25" stroke="#e67e22" stroke-width="1.5"/>
+          <text x="510" y="97" fill="#f0a050" font-size="12" font-weight="700" text-anchor="middle">Monitoring Stack</text>
+          <rect x="365" y="108" width="80" height="30" rx="3" fill="#061520" stroke="#e67e22" stroke-width="0.8"/>
+          <text x="405" y="127" fill="#f5c37d" font-size="9" text-anchor="middle">Prometheus</text>
+          <rect x="451" y="108" width="65" height="30" rx="3" fill="#061520" stroke="#e67e22" stroke-width="0.8"/>
+          <text x="484" y="127" fill="#f5c37d" font-size="9" text-anchor="middle">Grafana</text>
+          <rect x="522" y="108" width="80" height="30" rx="3" fill="#061520" stroke="#e67e22" stroke-width="0.8"/>
+          <text x="562" y="127" fill="#f5c37d" font-size="9" text-anchor="middle">AlertMgr</text>
+          <rect x="608" y="108" width="50" height="30" rx="3" fill="#061520" stroke="#e67e22" stroke-width="0.8"/>
+          <text x="633" y="127" fill="#f5c37d" font-size="9" text-anchor="middle">DCGM</text>
+        </g>
+
+        <!-- BMC Network -->
+        <g class="diagram-node" data-component="bmc-mgmt" data-info="BMC/IPMI/Redfish: out-of-band management on dedicated 1GbE network, PXE boot, serial console (SOL)">
+          <rect x="700" y="75" width="240" height="80" rx="6" fill="#0a1a25" stroke="#00bcd4" stroke-width="1.5"/>
+          <text x="820" y="97" fill="#4dd0e1" font-size="12" font-weight="700" text-anchor="middle">BMC / OOB Management</text>
+          <rect x="715" y="108" width="65" height="30" rx="3" fill="#061520" stroke="#00bcd4" stroke-width="0.8"/>
+          <text x="748" y="127" fill="#80deea" font-size="9" text-anchor="middle">IPMI</text>
+          <rect x="786" y="108" width="65" height="30" rx="3" fill="#061520" stroke="#00bcd4" stroke-width="0.8"/>
+          <text x="819" y="127" fill="#80deea" font-size="9" text-anchor="middle">Redfish</text>
+          <rect x="857" y="108" width="70" height="30" rx="3" fill="#061520" stroke="#00bcd4" stroke-width="0.8"/>
+          <text x="892" y="127" fill="#80deea" font-size="9" text-anchor="middle">PXE/DHCP</text>
+        </g>
+
+        <!-- GPU Operator + NCCL -->
+        <g class="diagram-node" data-component="gpu-operator" data-info="NVIDIA GPU Operator: auto-deploys GPU drivers, device plugin, DCGM exporter, MIG manager, GPU Feature Discovery">
+          <rect x="40" y="180" width="200" height="55" rx="5" fill="#0a1a25" stroke="#76b900" stroke-width="1.2"/>
+          <text x="140" y="203" fill="#a0d940" font-size="11" font-weight="600" text-anchor="middle">NVIDIA GPU Operator</text>
+          <text x="140" y="219" fill="#708820" font-size="8" text-anchor="middle">Driver | DevPlugin | MIG Mgr</text>
+        </g>
+
+        <g class="diagram-node" data-component="nccl" data-info="NCCL: collective comms — AllReduce, AllGather over NVLink (intra-node) + IB (inter-node). Ring/Tree algorithms.">
+          <rect x="260" y="180" width="160" height="55" rx="5" fill="#0a1a25" stroke="#76b900" stroke-width="1.2"/>
+          <text x="340" y="203" fill="#a0d940" font-size="11" font-weight="600" text-anchor="middle">NCCL</text>
+          <text x="340" y="219" fill="#708820" font-size="8" text-anchor="middle">AllReduce | Ring | Tree</text>
+        </g>
+
+        <g class="diagram-node" data-component="container-runtime" data-info="containerd + nvidia-container-toolkit: GPU-aware container runtime, injects /dev/nvidia* into pods">
+          <rect x="440" y="180" width="220" height="55" rx="5" fill="#0a1a25" stroke="#1abc9c" stroke-width="1.2"/>
+          <text x="550" y="203" fill="#2ee0b8" font-size="11" font-weight="600" text-anchor="middle">containerd + nvidia-ctk</text>
+          <text x="550" y="219" fill="#15886a" font-size="8" text-anchor="middle">GPU-aware container runtime</text>
+        </g>
+
+        <g class="diagram-node" data-component="network-operator" data-info="NVIDIA Network Operator: manages Multus CNI, SR-IOV device plugin, RDMA shared device plugin for K8s">
+          <rect x="680" y="180" width="200" height="55" rx="5" fill="#0a1a25" stroke="#4d96ff" stroke-width="1.2"/>
+          <text x="780" y="203" fill="#80b0ff" font-size="11" font-weight="600" text-anchor="middle">Network Operator</text>
+          <text x="780" y="219" fill="#3366aa" font-size="8" text-anchor="middle">Multus | SR-IOV | RDMA</text>
+        </g>
+
+        <!-- OVS / Virtual Networking -->
+        <g class="diagram-node" data-component="ovs" data-info="OVS (Open vSwitch): software-defined virtual switch on each compute node, VXLAN overlay, DPDK acceleration, BlueField offload">
+          <rect x="40" y="260" width="350" height="55" rx="5" fill="#0a1a25" stroke="#9b59b6" stroke-width="1.2"/>
+          <text x="215" y="283" fill="#c488e0" font-size="11" font-weight="600" text-anchor="middle">OVS (Open vSwitch) — Per-Node Virtual Networking</text>
+          <text x="215" y="299" fill="#7a4488" font-size="8" text-anchor="middle">br-int | VXLAN VNI (24-bit) | DPDK | BlueField offload | conntrack</text>
+        </g>
+
+        <g class="diagram-node" data-component="cni" data-info="CNI Stack: Calico/Cilium for primary pod networking (BGP/eBPF), plus Multus for secondary RDMA interfaces">
+          <rect x="420" y="260" width="280" height="55" rx="5" fill="#0a1a25" stroke="#1abc9c" stroke-width="1.2"/>
+          <text x="560" y="283" fill="#2ee0b8" font-size="11" font-weight="600" text-anchor="middle">CNI: Calico/Cilium + Multus</text>
+          <text x="560" y="299" fill="#15886a" font-size="8" text-anchor="middle">Pod networking | NetworkPolicy | eBPF</text>
+        </g>
+
+        <!-- Arrows down from orchestration to edge/network -->
+        <line x1="180" y1="315" x2="180" y2="430" stroke="#1abc9c" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+        <line x1="450" y1="315" x2="450" y2="430" stroke="#4d96ff" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>
+
+        <!-- Arrows to physical network layer -->
+        <line x1="320" y1="410" x2="320" y2="430" stroke="#1abc9c" stroke-width="0.8" stroke-dasharray="3,3" opacity="0.4"/>
+      </g>
+
+      <!-- ===== INTERNET CLOUD (very top) ===== -->
+      <g class="diagram-layer" data-layer="network">
+        <ellipse cx="500" cy="15" rx="120" ry="12" fill="none" stroke="#4d96ff" stroke-width="1" stroke-dasharray="4,3" opacity="0.6"/>
+        <text x="500" y="20" fill="#4d96ff" font-size="10" font-weight="600" text-anchor="middle">Internet / Users</text>
+      </g>
+
+      <!-- Connection from Internet to border routers -->
+      <line x1="430" y1="27" x2="300" y2="430" stroke="#4d96ff" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.6" marker-end="url(#arr-b)"/>
+      <line x1="570" y1="27" x2="700" y2="430" stroke="#4d96ff" stroke-width="1.5" stroke-dasharray="6,3" opacity="0.6" marker-end="url(#arr-b)"/>
+
+    </svg>
+  </div>
+
+  <!-- ===== LEGEND ===== -->
+  <div class="info-card" style="margin-top:1.5rem;">
+    <h3>Legend</h3>
+    <div class="detail-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-top:0.5rem;">
+      <div><span style="display:inline-block;width:14px;height:14px;background:#ff6b6b;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Layer 0: Physical Infrastructure</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#ffd93d;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Layer 1: Hardware (DGX/GPU)</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#b44dff;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> InfiniBand Fabric (East-West)</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#4d96ff;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Ethernet Fabric (North-South)</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#00c853;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Storage Network</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#1abc9c;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Orchestration (K8s)</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#e67e22;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Monitoring</div>
+      <div><span style="display:inline-block;width:14px;height:14px;background:#9b59b6;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Virtual Networking (OVS)</div>
+    </div>
+  </div>
+
+  <!-- ===== PORT MAP REFERENCE ===== -->
+  <div class="info-card" style="margin-top:1.5rem;">
+    <h3>Port Map Quick Reference</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Service</th><th>Protocol</th><th>Port</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>SSH</td><td>TCP</td><td>22</td><td>Remote management</td></tr>
+        <tr><td>BGP</td><td>TCP</td><td>179</td><td>Routing protocol peering</td></tr>
+        <tr><td>IPMI</td><td>UDP</td><td>623</td><td>BMC out-of-band management</td></tr>
+        <tr><td>Redfish</td><td>TCP</td><td>443</td><td>Modern BMC REST API</td></tr>
+        <tr><td>NFS</td><td>TCP</td><td>2049</td><td>Network file system</td></tr>
+        <tr><td>iSCSI</td><td>TCP</td><td>3260</td><td>Block storage over IP</td></tr>
+        <tr><td>K8s API</td><td>TCP</td><td>6443</td><td>Kubernetes API server</td></tr>
+        <tr><td>etcd</td><td>TCP</td><td>2379-2380</td><td>K8s state store (client/peer)</td></tr>
+        <tr><td>Kubelet</td><td>TCP</td><td>10250</td><td>Node agent</td></tr>
+        <tr><td>VXLAN</td><td>UDP</td><td>4789</td><td>Overlay encapsulation</td></tr>
+        <tr><td>RoCEv2</td><td>UDP</td><td>4791</td><td>RDMA over Converged Ethernet</td></tr>
+        <tr><td>Prometheus</td><td>TCP</td><td>9090</td><td>Metrics scraping</td></tr>
+        <tr><td>Grafana</td><td>TCP</td><td>3000</td><td>Dashboard UI</td></tr>
+        <tr><td>DCGM Exporter</td><td>TCP</td><td>9400</td><td>GPU metrics endpoint</td></tr>
+        <tr><td>Node Exporter</td><td>TCP</td><td>9100</td><td>Host metrics endpoint</td></tr>
+        <tr><td>IB Subnet Mgr</td><td>-</td><td>N/A (SMP)</td><td>Uses InfiniBand SMP</td></tr>
+        <tr><td>Lustre LNET</td><td>TCP</td><td>988</td><td>Lustre networking</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== CABLE COLOR GUIDE ===== -->
+  <div class="info-card" style="margin-top:1.5rem;">
+    <h3>Datacenter Cable Color Conventions</h3>
+    <div class="detail-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;margin-top:0.5rem;">
+      <div><span style="display:inline-block;width:30px;height:8px;background:#ffcc00;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Yellow</strong> — Single-mode fiber (OS2)</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#ff8800;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Orange</strong> — Multi-mode fiber (OM1/OM2)</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#00cccc;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Aqua</strong> — OM3/OM4 multi-mode (10G/40G/100G)</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#00cc00;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Lime/Green</strong> — OM5 wideband multi-mode</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#4444ff;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Blue</strong> — Cat6/Cat6a Ethernet</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#ff0000;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Red</strong> — Cross-connect / management</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#222222;border-radius:2px;vertical-align:middle;margin-right:8px;border:1px solid #666;"></span> <strong>Black</strong> — DAC (Direct Attach Copper)</div>
+      <div><span style="display:inline-block;width:30px;height:8px;background:#9933ff;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Purple</strong> — InfiniBand cables (convention)</div>
+    </div>
+  </div>
+
+  <!-- ===== PUTTING IT ALL TOGETHER ===== -->
+  <div class="info-card" style="margin-top:1.5rem;">
+    <h3>Putting It All Together: End-to-End Data Flows</h3>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Inference Request Flow (North-South)</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <ol>
+          <li><strong>User sends HTTPS request</strong> → enters via <strong>ISP A or B</strong> (BGP anycast)</li>
+          <li>Hits <strong>DDoS scrubbing</strong> (Cloudflare) → clean traffic to <strong>Border Router</strong></li>
+          <li>Border router → <strong>Firewall HA pair</strong> (stateful inspection, ACLs)</li>
+          <li>Firewall → <strong>Load Balancer</strong> (L7, TLS termination, health checks)</li>
+          <li>LB selects healthy backend → routes to <strong>K8s Ingress Controller</strong> (NodePort/LoadBalancer service)</li>
+          <li>K8s Ingress → <strong>Pod</strong> running inference server (e.g., Triton, vLLM)</li>
+          <li>Pod's container has GPU access via <strong>nvidia-container-toolkit</strong> (VFIO or device plugin)</li>
+          <li>Model loaded in <strong>GPU HBM3 memory</strong> → runs inference on <strong>H100 Tensor Cores</strong></li>
+          <li>Response travels back: Pod → Service → LB → Firewall → Border Router → ISP → User</li>
+          <li><strong>Total latency add: ~1-5ms</strong> network overhead on top of model inference time</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="expandable" style="margin-top:1rem;">
+      <div class="expandable-header">
+        <h4>Distributed Training Flow (East-West)</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <ol>
+          <li><strong>User submits PyTorchJob</strong> via K8s API → <strong>Scheduler</strong> (Kueue/Volcano) gang-schedules 32 pods</li>
+          <li>Each pod lands on a <strong>DGX H100 node</strong> with 8 GPUs allocated via Device Plugin</li>
+          <li>Pods get <strong>secondary RDMA network interface</strong> via Multus + SR-IOV (ConnectX-7 VF)</li>
+          <li><strong>NCCL</strong> initializes: discovers NVLink topology (intra-node) + InfiniBand (inter-node)</li>
+          <li>Training dataset loaded from <strong>Lustre/WekaFS</strong> via GPUDirect Storage → directly into GPU memory</li>
+          <li>Forward pass runs on local 8 GPUs, connected via <strong>NVLink 4.0</strong> (900 GB/s) through <strong>NVSwitch</strong></li>
+          <li>Gradient sync: <strong>NCCL AllReduce</strong> across 256 GPUs over <strong>InfiniBand NDR 400G</strong></li>
+          <li>Traffic path: GPU → ConnectX-7 → <strong>IB Leaf (QM9700)</strong> → <strong>IB Spine</strong> → Leaf → ConnectX-7 → GPU</li>
+          <li><strong>Adaptive routing</strong> on Quantum-2 switches distributes elephant flows across spine links</li>
+          <li>Every N steps: checkpoint saved to <strong>Lustre parallel filesystem</strong> (striped across 8+ OSTs)</li>
+          <li><strong>Total GPU-to-GPU latency: ~1-3μs</strong> | <strong>Aggregate bisection bandwidth: 12.8 Tb/s</strong></li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="expandable" style="margin-top:1rem;">
+      <div class="expandable-header">
+        <h4>SRE Incident Response: GPU Node Down</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <ol>
+          <li><strong>DCGM Exporter</strong> detects XID 48 (double-bit ECC error) on gpu-node-17, GPU 3</li>
+          <li><strong>Prometheus alert</strong> fires → <strong>AlertManager</strong> → PagerDuty page to on-call SRE</li>
+          <li>SRE checks <strong>Grafana dashboard</strong>: GPU temp normal, but ECC uncorrectable error count rising</li>
+          <li>SRE connects via <strong>BMC/Redfish</strong> (out-of-band): <code>curl https://bmc-node17/redfish/v1/Systems/1</code></li>
+          <li>Checks system event log: <code>ipmitool -H bmc-node17 sel list</code> confirms hardware fault</li>
+          <li><strong>Drain the node</strong>: <code>kubectl drain gpu-node-17 --ignore-daemonsets</code></li>
+          <li>K8s scheduler <strong>reschedules affected pods</strong> to other available nodes</li>
+          <li>Running training jobs detect NCCL failure → framework restarts from <strong>last checkpoint</strong></li>
+          <li>SRE opens <strong>RMA ticket</strong> with NVIDIA for GPU replacement</li>
+          <li>After hardware swap: run <strong>dcgmi diag -r 3</strong> (full diagnostic) → uncordon node</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== KNOWLEDGE CHECK ===== -->
+  <div class="info-card" style="margin-top:2rem;">
+    <h3>Final Knowledge Check</h3>
+
+    <div class="quiz-question" style="margin-top:1rem;">
+      <p><strong>Q1:</strong> In a GPU SuperPOD, what is the primary fabric used for GPU-to-GPU (east-west) communication during distributed training?</p>
+      <button class="quiz-answer" data-correct="false">100GbE Ethernet with RoCE</button>
+      <button class="quiz-answer" data-correct="true">InfiniBand NDR 400G with NCCL</button>
+      <button class="quiz-answer" data-correct="false">NVMe-oF over TCP</button>
+      <button class="quiz-answer" data-correct="false">VXLAN overlay network</button>
+    </div>
+
+    <div class="quiz-question" style="margin-top:1rem;">
+      <p><strong>Q2:</strong> An SRE sees XID 48 errors on a GPU. What is the correct immediate action?</p>
+      <button class="quiz-answer" data-correct="false">Reboot the node and hope it fixes itself</button>
+      <button class="quiz-answer" data-correct="false">Ignore it — single-bit ECC errors are harmless</button>
+      <button class="quiz-answer" data-correct="true">Drain the node and open an RMA — XID 48 is a fatal double-bit ECC error</button>
+      <button class="quiz-answer" data-correct="false">Update the GPU driver to the latest version</button>
+    </div>
+
+    <div class="quiz-question" style="margin-top:1rem;">
+      <p><strong>Q3:</strong> What is the standard UDP port for VXLAN encapsulation?</p>
+      <button class="quiz-answer" data-correct="false">4791 (that's RoCEv2)</button>
+      <button class="quiz-answer" data-correct="false">179 (that's BGP)</button>
+      <button class="quiz-answer" data-correct="true">4789</button>
+      <button class="quiz-answer" data-correct="false">6443 (that's K8s API)</button>
+    </div>
+  </div>
+
+</section>

@@ -1,0 +1,2179 @@
+<!-- Section 9: Monitoring & SRE -->
+<section id="monitoring-sre" class="content-section" data-layer="7">
+  <div class="section-header">
+    <span class="section-number">09</span>
+    <h2>Monitoring &amp; Site Reliability Engineering</h2>
+    <p class="section-subtitle">Observability, incident response, and operational excellence for GPU-scale infrastructure</p>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 1. GPU Monitoring with DCGM                                        -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>GPU Monitoring with NVIDIA DCGM</h3>
+    <p>
+      NVIDIA Data Center GPU Manager (DCGM) is the foundational monitoring framework for GPU clusters.
+      It provides a unified API and CLI for health monitoring, diagnostics, policy management, and telemetry
+      collection across hundreds or thousands of GPUs. DCGM runs as a persistent host-level daemon
+      (<code>nv-hostengine</code>) and exposes metrics via <code>dcgmi</code> CLI, C/Python APIs,
+      and the DCGM Exporter for Prometheus integration.
+    </p>
+
+    <h4>Core DCGM Architecture</h4>
+    <p>
+      The DCGM stack consists of the <strong>nv-hostengine</strong> daemon (runs on each node with GPUs),
+      the <strong>dcgmi</strong> command-line interface, and optional <strong>DCGM Exporter</strong>
+      (a lightweight Go binary that queries nv-hostengine and serves Prometheus-formatted metrics on
+      port <code>:9400/metrics</code>). In Kubernetes, DCGM Exporter typically runs as a DaemonSet
+      on every GPU node.
+    </p>
+
+    <h4>Essential dcgmi Commands</h4>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Purpose</th>
+            <th>Typical Use</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>dcgmi discovery -l</code></td>
+            <td>List all GPUs and their group IDs</td>
+            <td>Initial inventory and topology verification</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi diag -r 1</code></td>
+            <td>Quick diagnostic (deployment-level, ~30 seconds)</td>
+            <td>Pre-job health check, PCIe bandwidth verification</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi diag -r 2</code></td>
+            <td>Medium diagnostic (~2 minutes)</td>
+            <td>Targeted stress test, memory checks</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi diag -r 3</code></td>
+            <td>Long diagnostic (~15 minutes)</td>
+            <td>Full stress test: memory, compute, PCIe, NVLink, power</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi health -c -g 1</code></td>
+            <td>Check health of GPU group 1</td>
+            <td>Continuous health monitoring via scripts/cron</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi stats -e -g 1</code></td>
+            <td>Enable stats recording for group</td>
+            <td>Job-level GPU utilization profiling</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi stats -v -g 1</code></td>
+            <td>View recorded stats</td>
+            <td>Post-job analysis of GPU utilization</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi policy -s -g 1</code></td>
+            <td>Set policy watches (ECC, thermal, power)</td>
+            <td>Automated alerts when thresholds exceeded</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi topo -g 1</code></td>
+            <td>Display GPU topology (NVLink, PCIe affinity)</td>
+            <td>Validating NVLink mesh connectivity</td>
+          </tr>
+          <tr>
+            <td><code>dcgmi nvlink -s -g 1</code></td>
+            <td>Show NVLink status and error counts</td>
+            <td>Diagnosing NVLink degradation</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Key DCGM Metric Fields</h4>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Field ID</th>
+            <th>Prometheus Name</th>
+            <th>Description</th>
+            <th>Alert Threshold</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>203</td>
+            <td><code>DCGM_FI_DEV_GPU_UTIL</code></td>
+            <td>GPU SM (streaming multiprocessor) utilization %</td>
+            <td>&lt;10% during active job = possible issue</td>
+          </tr>
+          <tr>
+            <td>204</td>
+            <td><code>DCGM_FI_DEV_MEM_COPY_UTIL</code></td>
+            <td>Memory controller utilization %</td>
+            <td>Sustained 100% = memory bandwidth bottleneck</td>
+          </tr>
+          <tr>
+            <td>252</td>
+            <td><code>DCGM_FI_DEV_GPU_TEMP</code></td>
+            <td>GPU core temperature (Celsius)</td>
+            <td>&gt;83 C = thermal throttle, &gt;90 C = critical</td>
+          </tr>
+          <tr>
+            <td>150</td>
+            <td><code>DCGM_FI_DEV_POWER_USAGE</code></td>
+            <td>Current power draw (watts)</td>
+            <td>&gt;TDP = power throttling engaged</td>
+          </tr>
+          <tr>
+            <td>310</td>
+            <td><code>DCGM_FI_DEV_ECC_SBE_VOL_TOTAL</code></td>
+            <td>Single-bit ECC errors (volatile, correctable)</td>
+            <td>&gt;100/hour = degrading memory, monitor closely</td>
+          </tr>
+          <tr>
+            <td>313</td>
+            <td><code>DCGM_FI_DEV_ECC_DBE_VOL_TOTAL</code></td>
+            <td>Double-bit ECC errors (volatile, uncorrectable)</td>
+            <td>Any occurrence = fatal, drain node immediately</td>
+          </tr>
+          <tr>
+            <td>409</td>
+            <td><code>DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL</code></td>
+            <td>Aggregate NVLink bandwidth (MB/s)</td>
+            <td>Significantly below expected = link degradation</td>
+          </tr>
+          <tr>
+            <td>410-425</td>
+            <td><code>DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_*</code></td>
+            <td>NVLink CRC flit errors per link</td>
+            <td>Any non-zero count = investigate cable/GPU</td>
+          </tr>
+          <tr>
+            <td>245</td>
+            <td><code>DCGM_FI_DEV_PCIE_REPLAY_COUNTER</code></td>
+            <td>PCIe transaction replay count</td>
+            <td>&gt;100/hour = PCIe link degradation</td>
+          </tr>
+          <tr>
+            <td>230</td>
+            <td><code>DCGM_FI_DEV_XID_ERRORS</code></td>
+            <td>Last XID error code reported by GPU</td>
+            <td>Any non-zero = investigate (see XID table below)</td>
+          </tr>
+          <tr>
+            <td>254</td>
+            <td><code>DCGM_FI_DEV_MEM_TEMP</code></td>
+            <td>HBM memory temperature (Celsius)</td>
+            <td>&gt;95 C on HBM3e = throttle imminent</td>
+          </tr>
+          <tr>
+            <td>1001</td>
+            <td><code>DCGM_FI_DEV_FB_FREE</code></td>
+            <td>Free framebuffer (GPU memory) in MB</td>
+            <td>Near 0 = OOM risk for new allocations</td>
+          </tr>
+          <tr>
+            <td>1002</td>
+            <td><code>DCGM_FI_DEV_FB_USED</code></td>
+            <td>Used framebuffer (GPU memory) in MB</td>
+            <td>Contextual; track per-job trends</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>DCGM Diagnostics Levels</h4>
+    <div class="callout">
+      <strong>Level 1 (Quick / Deployment):</strong> ~30 seconds. Validates GPU presence, PCIe bandwidth,
+      basic NVLink connectivity. Run this before every job or as a node health gate in Slurm prolog scripts.
+      Catches obvious hardware failures (dead GPU, broken PCIe link).
+    </div>
+    <div class="callout">
+      <strong>Level 2 (Medium / Validation):</strong> ~2 minutes. Adds targeted stress tests for GPU compute
+      and memory subsystems. Suitable for post-maintenance validation or when a node returns from repair.
+      Detects marginal memory errors and reduced compute throughput.
+    </div>
+    <div class="callout">
+      <strong>Level 3 (Long / Extended):</strong> ~15 minutes. Full burn-in: extended stress on every GPU
+      subsystem including memory, compute SMs, NVLink bandwidth, PCIe bandwidth, and power delivery.
+      Run during commissioning of new hardware, after GPU/NVLink cable replacement, or quarterly as
+      preventive maintenance. This is the gold standard for confirming a node is fully operational.
+    </div>
+
+    <h4>DCGM Exporter Configuration Example</h4>
+    <pre><code class="language-yaml"># Kubernetes DaemonSet for DCGM Exporter
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+spec:
+  selector:
+    matchLabels:
+      app: dcgm-exporter
+  template:
+    metadata:
+      labels:
+        app: dcgm-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9400"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.1-ubuntu22.04
+          ports:
+            - name: metrics
+              containerPort: 9400
+          env:
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: DCGM_EXPORTER_COLLECTORS
+              value: "/etc/dcgm-exporter/dcp-metrics-included.csv"
+          volumeMounts:
+            - name: dcgm-csv
+              mountPath: /etc/dcgm-exporter
+          securityContext:
+            privileged: true
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: dcgm-csv
+          configMap:
+            name: dcgm-metrics-config</code></pre>
+
+    <pre><code class="language-bash"># Sample dcp-metrics-included.csv (controls which fields DCGM Exporter publishes)
+# Format: DCGM_FIELD_ID, prometheus_type, prometheus_help
+DCGM_FI_DEV_GPU_UTIL,         gauge, GPU utilization
+DCGM_FI_DEV_MEM_COPY_UTIL,    gauge, Memory utilization
+DCGM_FI_DEV_GPU_TEMP,         gauge, GPU temperature
+DCGM_FI_DEV_MEM_TEMP,         gauge, Memory temperature
+DCGM_FI_DEV_POWER_USAGE,      gauge, Power usage in watts
+DCGM_FI_DEV_FB_FREE,          gauge, Free framebuffer in MB
+DCGM_FI_DEV_FB_USED,          gauge, Used framebuffer in MB
+DCGM_FI_DEV_ECC_SBE_VOL_TOTAL, counter, Single-bit ECC errors
+DCGM_FI_DEV_ECC_DBE_VOL_TOTAL, counter, Double-bit ECC errors
+DCGM_FI_DEV_PCIE_REPLAY_COUNTER, counter, PCIe replay count
+DCGM_FI_DEV_XID_ERRORS,       gauge, Last XID error
+DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL, gauge, NVLink bandwidth</code></pre>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 2. Common GPU XID Errors                                           -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>GPU XID Errors &mdash; Critical SRE Knowledge</h3>
+    <p>
+      XID errors are NVIDIA GPU fault codes logged by the kernel driver to <code>dmesg</code> and
+      <code>/var/log/syslog</code>. Every SRE operating GPU infrastructure must be fluent in XID
+      interpretation. These codes appear as kernel messages in the format:
+      <code>NVRM: Xid (PCI:0000:41:00): 48, pid=12345, ...</code>. The XID number is the key to
+      diagnosis.
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>XID</th>
+            <th>Name</th>
+            <th>Severity</th>
+            <th>Root Cause</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>13</strong></td>
+            <td>GR (Graphics Engine) Fault</td>
+            <td style="color:#e8a838;">Medium</td>
+            <td>Usually a driver or CUDA runtime bug; sometimes bad application code accessing freed memory</td>
+            <td>Update driver. If persistent across driver versions, check application. Rare hardware root cause.</td>
+          </tr>
+          <tr>
+            <td><strong>31</strong></td>
+            <td>GPU Memory Page Retirement</td>
+            <td style="color:#e87838;">High</td>
+            <td>Correctable ECC errors exceeded threshold on a memory page; driver retires the page proactively</td>
+            <td>Monitor frequency. &gt;5 retirements/week = schedule GPU replacement. Check <code>nvidia-smi -q -d RETIRED_PAGES</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>43</strong></td>
+            <td>GPU Stopped Processing</td>
+            <td style="color:#e83838;">Critical</td>
+            <td>GPU context watchdog detected hang. Often thermal throttling, power delivery issue, or firmware bug.</td>
+            <td>Check thermals, power. Reset GPU with <code>nvidia-smi -r</code>. If recurring, drain and RMA.</td>
+          </tr>
+          <tr>
+            <td><strong>48</strong></td>
+            <td>Double-Bit ECC Error</td>
+            <td style="color:#e83838;">Critical</td>
+            <td>Uncorrectable memory error. Data corruption has occurred. Cannot be repaired in the field.</td>
+            <td>Drain node immediately. Kill affected jobs. RMA the GPU. Do NOT attempt to continue operations.</td>
+          </tr>
+          <tr>
+            <td><strong>63</strong></td>
+            <td>Row Remapping Failure</td>
+            <td style="color:#e83838;">Critical</td>
+            <td>GPU attempted to remap a faulty memory row but ran out of spare rows (Ampere+/Hopper).</td>
+            <td>GPU memory is permanently degraded. Drain node and RMA. Indicates extensive memory wear.</td>
+          </tr>
+          <tr>
+            <td><strong>64</strong></td>
+            <td>Fallen off the Bus</td>
+            <td style="color:#e83838;">Critical</td>
+            <td>GPU is no longer visible on the PCIe bus. Often a power or physical seating issue.</td>
+            <td>Power cycle node. If recurs, reseat GPU physically. Check PCIe riser card and power cables. Possible motherboard or GPU hardware failure.</td>
+          </tr>
+          <tr>
+            <td><strong>74</strong></td>
+            <td>NVLink Error</td>
+            <td style="color:#e87838;">High</td>
+            <td>NVLink CRC or protocol error. Cable degradation, connector issue, or NVLink circuitry fault.</td>
+            <td>Check <code>nvidia-smi nvlink -s</code>. Reseat NVLink cables. If errors persist, replace cable then GPU.</td>
+          </tr>
+          <tr>
+            <td><strong>79</strong></td>
+            <td>GPU Access to Invalid Address</td>
+            <td style="color:#e8a838;">Medium</td>
+            <td>Application or driver attempted to access an invalid GPU virtual address.</td>
+            <td>Usually an application bug. Enable <code>CUDA_LAUNCH_BLOCKING=1</code> to get precise stack trace. Update CUDA toolkit and driver.</td>
+          </tr>
+          <tr>
+            <td><strong>94</strong></td>
+            <td>Contained ECC Error</td>
+            <td style="color:#e87838;">High</td>
+            <td>ECC error was contained to the faulting application (Hopper+ feature). Process killed but GPU is OK.</td>
+            <td>Job will fail; can be restarted. Monitor for frequency. If repeated on same GPU, treat as XID 48 path.</td>
+          </tr>
+          <tr>
+            <td><strong>95</strong></td>
+            <td>Uncontained ECC Error</td>
+            <td style="color:#e83838;">Critical</td>
+            <td>ECC error could not be contained. Potential cross-process data corruption.</td>
+            <td>Drain node. Reset GPU. If recurring, RMA. Similar severity to XID 48.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Checking for XID Errors</h4>
+    <pre><code class="language-bash"># Check kernel messages for XID errors
+dmesg | grep -i "xid"
+
+# Check specific GPU by PCI bus address
+dmesg | grep "NVRM: Xid (PCI:0000:41:00)"
+
+# Query retired pages (indicates prior XID 31 events)
+nvidia-smi -q -d RETIRED_PAGES
+
+# Check ECC error counts
+nvidia-smi -q -d ECC
+
+# Query remapped rows (Ampere+/Hopper)
+nvidia-smi -q -d REMAPPED_ROWS
+
+# View XID errors in system journal (systemd)
+journalctl -k --since "1 hour ago" | grep -i xid
+
+# DCGM health check that catches XID-worthy conditions
+dcgmi health -c -g 1
+
+# Continuous monitoring: watch for new XID in real-time
+dmesg -wH | grep --line-buffered "Xid"</code></pre>
+
+    <h4>XID Error Troubleshooting Flowchart</h4>
+    <div class="diagram-container">
+      <svg viewBox="0 0 900 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="XID Error Troubleshooting Flowchart">
+        <style>
+          .xid-box { fill: #1a2332; stroke: #3b82f6; stroke-width: 2; rx: 8; }
+          .xid-decision { fill: #1a2332; stroke: #f59e0b; stroke-width: 2; }
+          .xid-action-green { fill: #064e3b; stroke: #10b981; stroke-width: 2; rx: 8; }
+          .xid-action-red { fill: #451a1a; stroke: #ef4444; stroke-width: 2; rx: 8; }
+          .xid-action-yellow { fill: #3b2f0a; stroke: #f59e0b; stroke-width: 2; rx: 8; }
+          .xid-text { fill: #e2e8f0; font-family: Inter, system-ui, sans-serif; font-size: 12px; text-anchor: middle; }
+          .xid-text-sm { fill: #cbd5e1; font-family: Inter, system-ui, sans-serif; font-size: 10px; text-anchor: middle; }
+          .xid-label { fill: #94a3b8; font-family: Inter, system-ui, sans-serif; font-size: 10px; text-anchor: middle; }
+          .xid-arrow { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#xid-arrowhead); }
+          .xid-title { fill: #f1f5f9; font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 700; text-anchor: middle; }
+        </style>
+        <defs>
+          <marker id="xid-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+          </marker>
+        </defs>
+
+        <!-- Title -->
+        <text x="450" y="30" class="xid-title">XID Error Troubleshooting Decision Tree</text>
+
+        <!-- Start: XID Detected -->
+        <rect x="340" y="50" width="220" height="40" class="xid-box"/>
+        <text x="450" y="75" class="xid-text">XID Error Detected in dmesg</text>
+
+        <!-- Decision: What type? -->
+        <polygon points="450,120 570,170 450,220 330,170" class="xid-decision"/>
+        <text x="450" y="167" class="xid-text">XID Type?</text>
+        <line x1="450" y1="90" x2="450" y2="120" class="xid-arrow"/>
+
+        <!-- Branch: ECC (XID 48/63/94/95) -->
+        <text x="240" y="160" class="xid-label">48/63/94/95</text>
+        <line x1="330" y1="170" x2="180" y2="170" class="xid-arrow"/>
+        <rect x="70" y="155" width="110" height="35" class="xid-action-red"/>
+        <text x="125" y="177" class="xid-text">ECC / Memory</text>
+
+        <line x1="125" y1="190" x2="125" y2="220" class="xid-arrow"/>
+        <polygon points="125,220 205,255 125,290 45,255" class="xid-decision"/>
+        <text x="125" y="252" class="xid-text-sm">Double-bit</text>
+        <text x="125" y="263" class="xid-text-sm">(48/95)?</text>
+
+        <!-- Yes: Drain + RMA -->
+        <text x="30" y="250" class="xid-label">Yes</text>
+        <line x1="45" y1="255" x2="10" y2="255" class="xid-arrow"/>
+        <rect x="-5" y="290" width="130" height="50" class="xid-action-red" transform="translate(0,-40)"/>
+        <text x="60" y="265" class="xid-text-sm" transform="translate(-60,30)">Drain Node</text>
+        <text x="60" y="277" class="xid-text-sm" transform="translate(-60,30)">Kill Jobs</text>
+        <text x="60" y="289" class="xid-text-sm" transform="translate(-60,30)">RMA GPU</text>
+
+        <!-- No: Monitor -->
+        <text x="218" y="295" class="xid-label">No (31/94)</text>
+        <line x1="125" y1="290" x2="125" y2="320" class="xid-arrow"/>
+        <rect x="55" y="320" width="140" height="45" class="xid-action-yellow"/>
+        <text x="125" y="340" class="xid-text-sm">Monitor frequency</text>
+        <text x="125" y="353" class="xid-text-sm">&gt;5/week? Plan RMA</text>
+
+        <!-- Branch: NVLink (XID 74) -->
+        <text x="450" y="230" class="xid-label">74</text>
+        <line x1="450" y1="220" x2="450" y2="260" class="xid-arrow"/>
+        <rect x="385" y="260" width="130" height="35" class="xid-action-yellow"/>
+        <text x="450" y="282" class="xid-text">NVLink Error</text>
+
+        <line x1="450" y1="295" x2="450" y2="325" class="xid-arrow"/>
+        <rect x="370" y="325" width="160" height="35" class="xid-box"/>
+        <text x="450" y="347" class="xid-text">Check nvidia-smi nvlink -s</text>
+
+        <line x1="450" y1="360" x2="450" y2="390" class="xid-arrow"/>
+        <polygon points="450,390 540,425 450,460 360,425" class="xid-decision"/>
+        <text x="450" y="422" class="xid-text-sm">Errors on</text>
+        <text x="450" y="433" class="xid-text-sm">one link?</text>
+
+        <text x="348" y="420" class="xid-label">Yes</text>
+        <line x1="360" y1="425" x2="300" y2="425" class="xid-arrow"/>
+        <rect x="210" y="408" width="90" height="35" class="xid-action-yellow"/>
+        <text x="255" y="430" class="xid-text-sm">Reseat/Replace</text>
+        <text x="255" y="441" class="xid-text-sm">NVLink Cable</text>
+
+        <text x="553" y="420" class="xid-label">No / Multi</text>
+        <line x1="540" y1="425" x2="600" y2="425" class="xid-arrow"/>
+        <rect x="600" y="408" width="100" height="35" class="xid-action-red"/>
+        <text x="650" y="430" class="xid-text-sm">Drain Node</text>
+        <text x="650" y="441" class="xid-text-sm">RMA GPU</text>
+
+        <!-- Branch: Compute (XID 13/43/79) -->
+        <text x="640" y="160" class="xid-label">13/43/79</text>
+        <line x1="570" y1="170" x2="680" y2="170" class="xid-arrow"/>
+        <rect x="680" y="155" width="130" height="35" class="xid-action-yellow"/>
+        <text x="745" y="177" class="xid-text">Compute / Driver</text>
+
+        <line x1="745" y1="190" x2="745" y2="220" class="xid-arrow"/>
+        <polygon points="745,220 830,255 745,290 660,255" class="xid-decision"/>
+        <text x="745" y="252" class="xid-text-sm">XID 43?</text>
+        <text x="745" y="263" class="xid-text-sm">(Hang)</text>
+
+        <!-- XID 43: Yes -->
+        <text x="843" y="250" class="xid-label">Yes</text>
+        <line x1="830" y1="255" x2="870" y2="255" class="xid-arrow"/>
+        <rect x="820" y="290" width="70" height="70" class="xid-box" transform="translate(-5,-45)"/>
+        <text x="850" y="262" class="xid-text-sm" transform="translate(0,0)">Check temp</text>
+        <text x="850" y="274" class="xid-text-sm" transform="translate(0,0)">Check power</text>
+        <text x="850" y="286" class="xid-text-sm" transform="translate(0,0)">GPU reset</text>
+
+        <!-- XID 13/79: No -->
+        <text x="647" y="295" class="xid-label">No (13/79)</text>
+        <line x1="745" y1="290" x2="745" y2="320" class="xid-arrow"/>
+        <rect x="680" y="320" width="130" height="50" class="xid-action-green"/>
+        <text x="745" y="340" class="xid-text-sm">Update driver</text>
+        <text x="745" y="353" class="xid-text-sm">Check application</text>
+        <text x="745" y="366" class="xid-text-sm">Usually SW issue</text>
+
+        <!-- Branch: PCIe (XID 64) -->
+        <text x="550" y="130" class="xid-label">64</text>
+        <line x1="510" y1="145" x2="610" y2="100" class="xid-arrow"/>
+        <rect x="610" y="70" width="150" height="50" class="xid-action-red"/>
+        <text x="685" y="90" class="xid-text-sm">GPU Fell Off Bus</text>
+        <text x="685" y="103" class="xid-text-sm">Power cycle &rarr; Reseat &rarr; RMA</text>
+
+        <!-- Bottom summary -->
+        <rect x="200" y="500" width="500" height="65" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+        <text x="450" y="520" class="xid-text" font-weight="600">General Rule of Thumb</text>
+        <text x="450" y="537" class="xid-text-sm">Single-bit ECC / XID 31 / XID 94 &rarr; Monitor &amp; schedule replacement</text>
+        <text x="450" y="551" class="xid-text-sm">Double-bit ECC / XID 48 / XID 63 / XID 95 &rarr; Drain immediately &amp; RMA</text>
+      </svg>
+    </div>
+
+    <div class="callout-warning">
+      <strong>SRE Rule:</strong> Any XID 48 (double-bit ECC) event is a <strong>drain-immediately</strong> situation.
+      The GPU has experienced uncorrectable memory corruption. All running jobs on that GPU are suspect and
+      their outputs should be treated as potentially incorrect. The node must be drained from the scheduler,
+      the GPU replaced, and a Level 3 DCGM diagnostic run before returning to service.
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 3. Prometheus + Grafana Stack                                      -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>Prometheus + Grafana Observability Stack</h3>
+    <p>
+      The standard observability stack for GPU clusters is Prometheus for metrics collection and storage,
+      Grafana for visualization and dashboards, and AlertManager for alert routing. This stack is deployed
+      either directly on the cluster or as a dedicated monitoring infrastructure, and it forms the nerve
+      center for all operational visibility.
+    </p>
+
+    <!-- Monitoring Stack Architecture Diagram -->
+    <h4>Monitoring Stack Architecture</h4>
+    <div class="diagram-container">
+      <svg viewBox="0 0 950 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Monitoring Stack Architecture Diagram">
+        <style>
+          .mon-box { rx: 8; stroke-width: 2; }
+          .mon-gpu { fill: #1a2332; stroke: #76b900; }
+          .mon-export { fill: #1a2332; stroke: #3b82f6; }
+          .mon-prom { fill: #1e1107; stroke: #e6522c; }
+          .mon-graf { fill: #1a1e2e; stroke: #f46800; }
+          .mon-alert { fill: #2a1a1a; stroke: #ef4444; }
+          .mon-ext { fill: #1a2332; stroke: #8b5cf6; }
+          .mon-text { fill: #e2e8f0; font-family: Inter, system-ui, sans-serif; font-size: 12px; text-anchor: middle; }
+          .mon-text-sm { fill: #cbd5e1; font-family: Inter, system-ui, sans-serif; font-size: 10px; text-anchor: middle; }
+          .mon-text-title { fill: #f1f5f9; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 700; text-anchor: middle; }
+          .mon-label { fill: #94a3b8; font-family: Inter, system-ui, sans-serif; font-size: 9px; text-anchor: middle; font-style: italic; }
+          .mon-arrow { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#mon-arrowhead); }
+          .mon-arrow-alert { stroke: #ef4444; stroke-width: 1.5; fill: none; marker-end: url(#mon-arrowhead-red); }
+          .mon-section-label { fill: #64748b; font-family: Inter, system-ui, sans-serif; font-size: 11px; font-weight: 600; text-anchor: start; letter-spacing: 1px; text-transform: uppercase; }
+        </style>
+        <defs>
+          <marker id="mon-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+          </marker>
+          <marker id="mon-arrowhead-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+          </marker>
+        </defs>
+
+        <!-- Section labels -->
+        <text x="30" y="30" class="mon-section-label">GPU Nodes (per-node)</text>
+        <text x="400" y="30" class="mon-section-label">Monitoring Infrastructure</text>
+        <text x="750" y="30" class="mon-section-label">Consumers</text>
+
+        <!-- Dashed separators -->
+        <line x1="370" y1="15" x2="370" y2="570" stroke="#334155" stroke-width="1" stroke-dasharray="5,5"/>
+        <line x1="720" y1="15" x2="720" y2="570" stroke="#334155" stroke-width="1" stroke-dasharray="5,5"/>
+
+        <!-- GPU Node 1 -->
+        <rect x="30" y="50" width="310" height="170" rx="12" fill="#0f1724" stroke="#334155" stroke-width="1"/>
+        <text x="185" y="72" class="mon-text" font-weight="600">GPU Node (gpu-node-001)</text>
+
+        <!-- GPUs -->
+        <rect x="50" y="85" width="65" height="30" class="mon-box mon-gpu"/>
+        <text x="82" y="104" class="mon-text-sm">GPU 0-3</text>
+        <rect x="125" y="85" width="65" height="30" class="mon-box mon-gpu"/>
+        <text x="157" y="104" class="mon-text-sm">GPU 4-7</text>
+
+        <!-- nv-hostengine -->
+        <rect x="210" y="85" width="110" height="30" class="mon-box mon-gpu"/>
+        <text x="265" y="104" class="mon-text-sm">nv-hostengine</text>
+
+        <!-- DCGM Exporter -->
+        <rect x="90" y="135" width="160" height="35" class="mon-box mon-export"/>
+        <text x="170" y="157" class="mon-text">DCGM Exporter :9400</text>
+
+        <!-- Node Exporter -->
+        <rect x="90" y="180" width="160" height="30" class="mon-box mon-export"/>
+        <text x="170" y="199" class="mon-text-sm">Node Exporter :9100</text>
+
+        <!-- Arrows: GPU -> hostengine -> exporter -->
+        <line x1="115" y1="115" x2="145" y2="135" class="mon-arrow"/>
+        <line x1="265" y1="115" x2="210" y2="135" class="mon-arrow"/>
+
+        <!-- GPU Node 2 (smaller, indicating scale) -->
+        <rect x="30" y="240" width="310" height="60" rx="12" fill="#0f1724" stroke="#334155" stroke-width="1"/>
+        <text x="185" y="265" class="mon-text-sm">gpu-node-002 ... gpu-node-256</text>
+        <text x="185" y="280" class="mon-label">(same stack on every GPU node)</text>
+
+        <!-- IB / Network exporters -->
+        <rect x="30" y="320" width="310" height="50" rx="12" fill="#0f1724" stroke="#334155" stroke-width="1"/>
+        <text x="185" y="342" class="mon-text-sm">IB Switch Exporters / UFM API</text>
+        <text x="185" y="357" class="mon-label">InfiniBand fabric telemetry</text>
+
+        <!-- IPMI Exporter -->
+        <rect x="30" y="385" width="310" height="50" rx="12" fill="#0f1724" stroke="#334155" stroke-width="1"/>
+        <text x="185" y="407" class="mon-text-sm">IPMI Exporter / Redfish Exporter</text>
+        <text x="185" y="422" class="mon-label">BMC, power, fan, chassis sensors</text>
+
+        <!-- Storage exporter -->
+        <rect x="30" y="450" width="310" height="50" rx="12" fill="#0f1724" stroke="#334155" stroke-width="1"/>
+        <text x="185" y="472" class="mon-text-sm">Lustre / GPFS / NFS Exporters</text>
+        <text x="185" y="487" class="mon-label">Storage throughput, IOPS, capacity</text>
+
+        <!-- ===== Prometheus ===== -->
+        <rect x="400" y="100" width="180" height="80" class="mon-box mon-prom"/>
+        <text x="490" y="130" class="mon-text-title" fill="#e6522c">Prometheus</text>
+        <text x="490" y="148" class="mon-text-sm">Time-series DB</text>
+        <text x="490" y="162" class="mon-text-sm">PromQL query engine</text>
+
+        <!-- Scrape arrows -->
+        <line x1="250" y1="152" x2="400" y2="135" class="mon-arrow"/>
+        <text x="330" y="130" class="mon-label">scrape /metrics</text>
+        <line x1="250" y1="195" x2="400" y2="150" class="mon-arrow"/>
+        <line x1="340" y1="270" x2="400" y2="155" class="mon-arrow"/>
+        <line x1="340" y1="345" x2="400" y2="160" class="mon-arrow"/>
+        <line x1="340" y1="410" x2="400" y2="165" class="mon-arrow"/>
+        <line x1="340" y1="475" x2="400" y2="170" class="mon-arrow"/>
+
+        <!-- Thanos / Long-term storage -->
+        <rect x="400" y="210" width="180" height="50" class="mon-box mon-ext"/>
+        <text x="490" y="232" class="mon-text-sm">Thanos / Mimir</text>
+        <text x="490" y="246" class="mon-text-sm">Long-term storage (S3/GCS)</text>
+        <line x1="490" y1="180" x2="490" y2="210" class="mon-arrow"/>
+
+        <!-- AlertManager -->
+        <rect x="400" y="290" width="180" height="60" class="mon-box mon-alert"/>
+        <text x="490" y="315" class="mon-text" fill="#ef4444" font-weight="600">AlertManager</text>
+        <text x="490" y="332" class="mon-text-sm">Routing, grouping, silencing</text>
+
+        <line x1="490" y1="180" x2="490" y2="290" class="mon-arrow-alert"/>
+        <text x="520" y="245" class="mon-label" transform="rotate(90, 520, 245)">alerts</text>
+
+        <!-- Recording rules / Service Discovery -->
+        <rect x="400" y="380" width="180" height="55" class="mon-box" style="fill:#1a2332; stroke:#64748b;"/>
+        <text x="490" y="402" class="mon-text-sm">Service Discovery</text>
+        <text x="490" y="418" class="mon-text-sm">K8s API / file_sd / DNS</text>
+
+        <line x1="490" y1="380" x2="490" y2="180" class="mon-arrow" style="stroke-dasharray:4,3;"/>
+
+        <!-- ===== Grafana ===== -->
+        <rect x="750" y="70" width="170" height="80" class="mon-box mon-graf"/>
+        <text x="835" y="100" class="mon-text-title" fill="#f46800">Grafana</text>
+        <text x="835" y="118" class="mon-text-sm">Dashboards</text>
+        <text x="835" y="132" class="mon-text-sm">GPU heatmaps, alerts</text>
+
+        <line x1="580" y1="130" x2="750" y2="110" class="mon-arrow"/>
+        <text x="665" y="108" class="mon-label">PromQL queries</text>
+
+        <!-- PagerDuty -->
+        <rect x="750" y="190" width="170" height="45" class="mon-box mon-alert"/>
+        <text x="835" y="217" class="mon-text">PagerDuty</text>
+
+        <line x1="580" y1="310" x2="750" y2="215" class="mon-arrow-alert"/>
+
+        <!-- Slack -->
+        <rect x="750" y="255" width="170" height="45" class="mon-box" style="fill:#1a2332; stroke:#4a154b;"/>
+        <text x="835" y="282" class="mon-text">Slack (#gpu-alerts)</text>
+
+        <line x1="580" y1="320" x2="750" y2="275" class="mon-arrow-alert"/>
+
+        <!-- Email / Webhook -->
+        <rect x="750" y="320" width="170" height="45" class="mon-box" style="fill:#1a2332; stroke:#64748b;"/>
+        <text x="835" y="347" class="mon-text-sm">Email / Webhook / OpsGenie</text>
+
+        <line x1="580" y1="335" x2="750" y2="340" class="mon-arrow-alert"/>
+
+        <!-- Loki (Logs) -->
+        <rect x="750" y="400" width="170" height="55" class="mon-box" style="fill:#1a2332; stroke:#f59e0b;"/>
+        <text x="835" y="422" class="mon-text" fill="#f59e0b" font-weight="600">Grafana Loki</text>
+        <text x="835" y="438" class="mon-text-sm">Log aggregation</text>
+
+        <!-- Promtail -->
+        <rect x="400" y="460" width="180" height="50" class="mon-box" style="fill:#1a2332; stroke:#f59e0b;"/>
+        <text x="490" y="482" class="mon-text-sm">Promtail / Fluentd</text>
+        <text x="490" y="496" class="mon-text-sm">Log shippers (per-node)</text>
+
+        <line x1="580" y1="485" x2="750" y2="430" class="mon-arrow"/>
+        <text x="665" y="448" class="mon-label">log streams</text>
+
+        <line x1="340" y1="485" x2="400" y2="485" class="mon-arrow"/>
+
+        <!-- Grafana -> Loki -->
+        <line x1="835" y1="150" x2="835" y2="400" class="mon-arrow" style="stroke-dasharray:4,3; stroke:#f59e0b;"/>
+        <text x="870" y="280" class="mon-label" style="fill:#f59e0b;" transform="rotate(90, 870, 280)">LogQL queries</text>
+
+        <!-- Legend -->
+        <rect x="400" y="530" width="280" height="40" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+        <line x1="420" y1="550" x2="440" y2="550" class="mon-arrow"/>
+        <text x="475" y="554" class="mon-label">metrics/data flow</text>
+        <line x1="530" y1="550" x2="550" y2="550" class="mon-arrow-alert"/>
+        <text x="585" y="554" class="mon-label">alert routing</text>
+        <line x1="620" y1="550" x2="640" y2="550" style="stroke:#64748b; stroke-width:1.5; stroke-dasharray:4,3;"/>
+        <text x="665" y="554" class="mon-label">query</text>
+      </svg>
+    </div>
+
+    <h4>Prometheus Configuration for GPU Metrics</h4>
+    <pre><code class="language-yaml"># prometheus.yml - GPU cluster scrape configuration
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# Recording rules for pre-aggregation
+rule_files:
+  - /etc/prometheus/rules/gpu_alerts.yml
+  - /etc/prometheus/rules/gpu_recordings.yml
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # DCGM Exporter (GPU metrics)
+  - job_name: 'dcgm-exporter'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ['monitoring']
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: dcgm-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: "$1:9400"
+
+  # Node Exporter (CPU, memory, disk, network)
+  - job_name: 'node-exporter'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: node-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: "$1:9100"
+
+  # IPMI Exporter (BMC sensors)
+  - job_name: 'ipmi-exporter'
+    static_configs:
+      - targets:
+          - bmc-gpu-001.mgmt:9290
+          - bmc-gpu-002.mgmt:9290
+    metrics_path: /ipmi
+    params:
+      module: [default]
+
+  # InfiniBand metrics
+  - job_name: 'infiniband'
+    static_configs:
+      - targets:
+          - ufm-server:9400
+    metrics_path: /metrics</code></pre>
+
+    <h4>GPU Alert Rules</h4>
+    <pre><code class="language-yaml"># /etc/prometheus/rules/gpu_alerts.yml
+groups:
+  - name: gpu-health
+    interval: 30s
+    rules:
+      # Temperature alerts
+      - alert: GPUTemperatureWarning
+        expr: DCGM_FI_DEV_GPU_TEMP > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.instance }} at {{ $value }}°C"
+          description: "GPU temperature above 80°C for 5 minutes. Thermal throttling imminent at 83°C."
+          runbook_url: "https://wiki.internal/runbooks/gpu-thermal"
+
+      - alert: GPUTemperatureCritical
+        expr: DCGM_FI_DEV_GPU_TEMP > 85
+        for: 2m
+        labels:
+          severity: critical
+          team: gpu-infra
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.instance }} OVERHEATING at {{ $value }}°C"
+          description: "GPU temperature above 85°C. Active thermal throttling. Check cooling system."
+
+      # ECC error alerts
+      - alert: GPUDoublebitECC
+        expr: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: gpu-infra
+          page: "true"
+        annotations:
+          summary: "FATAL: Double-bit ECC error on GPU {{ $labels.gpu }} on {{ $labels.instance }}"
+          description: "Uncorrectable memory error detected. Drain node immediately and RMA GPU."
+
+      - alert: GPUSingleBitECCHigh
+        expr: rate(DCGM_FI_DEV_ECC_SBE_VOL_TOTAL[1h]) > 100
+        for: 10m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "High single-bit ECC rate on GPU {{ $labels.gpu }} on {{ $labels.instance }}"
+          description: "{{ $value }} correctable ECC errors/hour. Memory degrading. Plan replacement."
+
+      # XID error alert
+      - alert: GPUXidError
+        expr: DCGM_FI_DEV_XID_ERRORS != 0
+        for: 0m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "XID {{ $value }} on GPU {{ $labels.gpu }} on {{ $labels.instance }}"
+          description: "GPU reported XID error. Check dmesg on the node for details."
+
+      # GPU utilization anomalies
+      - alert: GPUIdleDuringJob
+        expr: |
+          DCGM_FI_DEV_GPU_UTIL < 5
+          and on(instance) slurm_node_state{state="allocated"} == 1
+        for: 15m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "GPU {{ $labels.gpu }} idle on allocated node {{ $labels.instance }}"
+          description: "GPU shows <5% utilization but node is allocated. Job may be stuck or misconfigured."
+
+      # Power alerts
+      - alert: GPUPowerExceedsTDP
+        expr: DCGM_FI_DEV_POWER_USAGE > 700
+        for: 5m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "GPU {{ $labels.gpu }} power {{ $value }}W exceeds TDP on {{ $labels.instance }}"
+
+      # NVLink errors
+      - alert: NVLinkCRCErrors
+        expr: rate(DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "NVLink CRC errors on GPU {{ $labels.gpu }} on {{ $labels.instance }}"
+          description: "NVLink experiencing CRC errors. Check cables and connectors."
+
+      # PCIe replay
+      - alert: PCIeReplayHigh
+        expr: rate(DCGM_FI_DEV_PCIE_REPLAY_COUNTER[1h]) > 100
+        for: 10m
+        labels:
+          severity: warning
+          team: gpu-infra
+        annotations:
+          summary: "High PCIe replay count on GPU {{ $labels.gpu }} on {{ $labels.instance }}"
+          description: "PCIe link quality degraded. Check physical seating and riser card."
+
+      # Node-level alerts
+      - alert: GPUNodeDown
+        expr: up{job="dcgm-exporter"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          team: gpu-infra
+        annotations:
+          summary: "DCGM Exporter down on {{ $labels.instance }}"
+          description: "Cannot scrape GPU metrics. Node may be down or DCGM daemon failed."</code></pre>
+
+    <h4>Useful PromQL Queries for GPU Operations</h4>
+    <pre><code class="language-bash"># Average GPU utilization across the entire cluster
+avg(DCGM_FI_DEV_GPU_UTIL)
+
+# GPU utilization heatmap: per-node, per-GPU
+DCGM_FI_DEV_GPU_UTIL
+
+# Top 10 hottest GPUs in the cluster
+topk(10, DCGM_FI_DEV_GPU_TEMP)
+
+# Total power consumption across all GPUs (watts)
+sum(DCGM_FI_DEV_POWER_USAGE)
+
+# GPUs with any ECC errors in the last hour
+sum by (instance, gpu) (increase(DCGM_FI_DEV_ECC_SBE_VOL_TOTAL[1h])) > 0
+
+# GPU memory utilization percentage
+(DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE)) * 100
+
+# Nodes with GPUs above 80°C
+count by (instance) (DCGM_FI_DEV_GPU_TEMP > 80)
+
+# Average GPU utilization by rack (requires rack label)
+avg by (rack) (DCGM_FI_DEV_GPU_UTIL)
+
+# NVLink bandwidth utilization rate of change
+rate(DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL[5m])
+
+# Cluster-wide GPU availability (fraction of healthy GPUs)
+count(DCGM_FI_DEV_GPU_TEMP > 0) / count(DCGM_FI_DEV_GPU_TEMP >= 0)</code></pre>
+
+    <h4>Grafana Dashboard Panels</h4>
+    <p>
+      A production GPU cluster Grafana deployment typically includes these dashboards:
+    </p>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Dashboard</th>
+            <th>Key Panels</th>
+            <th>Audience</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Cluster Overview</strong></td>
+            <td>Total GPUs healthy/degraded/down, aggregate power (kW), average temp heatmap, cluster utilization gauge</td>
+            <td>Management, NOC</td>
+          </tr>
+          <tr>
+            <td><strong>Per-Node GPU Detail</strong></td>
+            <td>8-GPU temp/util/memory/power time series, NVLink error counts, PCIe bandwidth, ECC counters</td>
+            <td>SRE, hardware team</td>
+          </tr>
+          <tr>
+            <td><strong>GPU Utilization Heatmap</strong></td>
+            <td>All GPUs in cluster as a heatmap grid (rows=nodes, columns=GPUs), colored by utilization %</td>
+            <td>Capacity planning, SRE</td>
+          </tr>
+          <tr>
+            <td><strong>InfiniBand Fabric</strong></td>
+            <td>Port status (up/down), data rate per port, error counters, symbol errors, UFM events</td>
+            <td>Network team, SRE</td>
+          </tr>
+          <tr>
+            <td><strong>Power &amp; Cooling</strong></td>
+            <td>Per-rack power draw (kW), inlet/exhaust temps, fan RPM, PDU current per phase</td>
+            <td>Facilities, SRE</td>
+          </tr>
+          <tr>
+            <td><strong>Training Job Metrics</strong></td>
+            <td>Samples/sec, tokens/sec, loss curve, GPU util during training, NCCL all-reduce latency</td>
+            <td>ML engineers, SRE</td>
+          </tr>
+          <tr>
+            <td><strong>Storage Performance</strong></td>
+            <td>Lustre OST throughput, metadata ops/sec, client read/write bandwidth, capacity trending</td>
+            <td>Storage team, SRE</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>AlertManager Configuration</h4>
+    <pre><code class="language-yaml"># alertmanager.yml
+global:
+  resolve_timeout: 5m
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+  slack_api_url: 'https://hooks.slack.com/services/T00/B00/XXX'
+
+route:
+  receiver: 'default-slack'
+  group_by: ['alertname', 'instance', 'gpu']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Critical GPU hardware alerts -> PagerDuty (pages on-call)
+    - match:
+        severity: critical
+        team: gpu-infra
+      receiver: 'gpu-pagerduty'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Warning-level GPU alerts -> Slack channel
+    - match:
+        severity: warning
+        team: gpu-infra
+      receiver: 'gpu-slack'
+      repeat_interval: 4h
+
+receivers:
+  - name: 'default-slack'
+    slack_configs:
+      - channel: '#infra-alerts'
+        title: '{{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}'
+        send_resolved: true
+
+  - name: 'gpu-pagerduty'
+    pagerduty_configs:
+      - service_key: 'your-pagerduty-integration-key'
+        severity: '{{ .GroupLabels.severity }}'
+        description: '{{ .GroupLabels.alertname }}: {{ (index .Alerts 0).Annotations.summary }}'
+        details:
+          instance: '{{ (index .Alerts 0).Labels.instance }}'
+          gpu: '{{ (index .Alerts 0).Labels.gpu }}'
+
+  - name: 'gpu-slack'
+    slack_configs:
+      - channel: '#gpu-alerts'
+        title: '{{ .GroupLabels.alertname }} [{{ .GroupLabels.severity | toUpper }}]'
+        text: >-
+          {{ range .Alerts -}}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+
+inhibit_rules:
+  # If node is down, suppress individual GPU alerts for that node
+  - source_match:
+      alertname: GPUNodeDown
+    target_match_re:
+      alertname: GPU.*
+    equal: ['instance']</code></pre>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 4. BMC / IPMI / Redfish                                            -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>BMC / IPMI / Redfish &mdash; Out-of-Band Management</h3>
+    <p>
+      Every server in a GPU cluster has a Baseboard Management Controller (BMC): an independent
+      embedded processor with its own dedicated network interface that provides out-of-band management.
+      The BMC operates independently of the host OS, meaning you can power cycle a completely frozen
+      node, access its serial console, and read hardware sensors even when the operating system has crashed.
+      This is an indispensable tool for SRE operations.
+    </p>
+
+    <h4>BMC Architecture</h4>
+    <p>
+      The BMC is a small ARM-based SoC (commonly AST2600 from ASPEED) soldered onto the server motherboard.
+      It has its own RAM (typically 512 MB - 1 GB), flash storage for firmware, and a dedicated Ethernet port
+      (the "IPMI port" or "management port") on a physically separate network (the out-of-band management
+      network, often a /24 VLAN like <code>10.10.100.0/24</code>).
+    </p>
+
+    <h4>IPMI Commands (ipmitool)</h4>
+    <p>
+      IPMI (Intelligent Platform Management Interface) is the legacy protocol for BMC communication.
+      While being replaced by Redfish, <code>ipmitool</code> remains widely used.
+    </p>
+    <pre><code class="language-bash"># ===== Power Management =====
+# Check power status
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password power status
+# Output: Chassis Power is on
+
+# Power cycle (hard reboot - last resort)
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password power cycle
+
+# Graceful shutdown
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password power soft
+
+# Force power off (equivalent to holding power button)
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password power off
+
+# Power on
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password power on
+
+# ===== Serial Over LAN (Console Access) =====
+# Access serial console of a frozen/unresponsive node
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password sol activate
+# Use ~. to disconnect from SOL session
+
+# ===== Sensor Readings =====
+# List all sensor data records
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password sdr list
+# Example output:
+# CPU0 Temp        | 62 degrees C      | ok
+# CPU1 Temp        | 58 degrees C      | ok
+# Inlet Temp       | 24 degrees C      | ok
+# System Fan 1     | 8400 RPM          | ok
+# PSU1 Input       | 1648 Watts        | ok
+# PSU2 Input       | 1632 Watts        | ok
+
+# Get a specific sensor reading
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password sdr get "Inlet Temp"
+
+# ===== System Event Log =====
+# List hardware events (PSU failures, temp events, boot errors)
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password sel list
+# Example output:
+#    1 | 02/15/2026 | 14:23:05 | Temperature #0x30 | Upper Critical going high
+#    2 | 02/15/2026 | 14:23:06 | Fan #0x45 | Lower Critical going low
+
+# Clear event log (after review)
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password sel clear
+
+# ===== Chassis Status =====
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password chassis status
+
+# ===== BMC Info =====
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password bmc info
+
+# ===== Boot Device Override =====
+# Force next boot from PXE (for OS re-imaging)
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password chassis bootdev pxe
+
+# Force next boot from BIOS setup
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password chassis bootdev bios
+
+# ===== Fan Control (vendor-specific, use with caution) =====
+# Read fan mode
+ipmitool -I lanplus -H bmc-gpu-001.mgmt -U admin -P password raw 0x30 0x45 0x00</code></pre>
+
+    <h4>Redfish &mdash; Modern REST API for BMC</h4>
+    <p>
+      Redfish (DMTF standard) is the modern replacement for IPMI. It provides a RESTful JSON-over-HTTPS
+      API, proper authentication, a rich data model, and is significantly more secure and extensible than
+      IPMI. NVIDIA DGX systems use Redfish extensively for management, including GPU-specific telemetry
+      exposed through OEM extensions.
+    </p>
+    <pre><code class="language-bash"># ===== Redfish API Examples (using curl) =====
+
+# Get system information
+curl -sk -u admin:password \
+  https://bmc-gpu-001.mgmt/redfish/v1/Systems/1 | jq '.'
+# Returns: Model, SerialNumber, PowerState, BiosVersion, ProcessorSummary, MemorySummary
+
+# Get BMC (Manager) information
+curl -sk -u admin:password \
+  https://bmc-gpu-001.mgmt/redfish/v1/Managers/1 | jq '.'
+# Returns: FirmwareVersion, DateTime, NetworkProtocol
+
+# Get thermal data (temperatures and fans)
+curl -sk -u admin:password \
+  https://bmc-gpu-001.mgmt/redfish/v1/Chassis/1/Thermal | jq '.'
+# Returns: Temperatures[] (ReadingCelsius, UpperThresholdCritical), Fans[] (Reading, Status)
+
+# Get power data (PSU status, power consumption)
+curl -sk -u admin:password \
+  https://bmc-gpu-001.mgmt/redfish/v1/Chassis/1/Power | jq '.'
+# Returns: PowerControl[] (PowerConsumedWatts), PowerSupplies[] (Status, LineInputVoltage)
+
+# Perform a graceful restart via Redfish
+curl -sk -u admin:password \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"ResetType": "GracefulRestart"}' \
+  https://bmc-gpu-001.mgmt/redfish/v1/Systems/1/Actions/ComputerSystem.Reset
+
+# Force power off
+curl -sk -u admin:password \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"ResetType": "ForceOff"}' \
+  https://bmc-gpu-001.mgmt/redfish/v1/Systems/1/Actions/ComputerSystem.Reset
+
+# Get system event log entries
+curl -sk -u admin:password \
+  https://bmc-gpu-001.mgmt/redfish/v1/Systems/1/LogServices/Log1/Entries | jq '.'
+
+# Get storage controller info
+curl -sk -u admin:password \
+  https://bmc-gpu-001.mgmt/redfish/v1/Systems/1/Storage | jq '.'
+
+# DGX-specific: Get GPU info via Redfish OEM extensions
+curl -sk -u admin:password \
+  https://bmc-dgx-001.mgmt/redfish/v1/Systems/1/Oem/Nvidia/GPUs | jq '.'</code></pre>
+
+    <div class="callout">
+      <strong>Management Network Security:</strong> BMC/IPMI/Redfish interfaces must be isolated on a
+      dedicated management VLAN with strict firewall rules. IPMI has known security vulnerabilities
+      (cipher zero, weak default credentials). Always change default passwords, disable IPMI if Redfish
+      is available, use HTTPS for Redfish, and restrict management network access to authorized jump hosts only.
+    </div>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>IPMI</th>
+            <th>Redfish</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Protocol</td>
+            <td>Binary over UDP (port 623)</td>
+            <td>JSON over HTTPS (port 443)</td>
+          </tr>
+          <tr>
+            <td>Authentication</td>
+            <td>IPMI 2.0 RAKP (weak by modern standards)</td>
+            <td>HTTP Basic/Session auth over TLS</td>
+          </tr>
+          <tr>
+            <td>Data Model</td>
+            <td>Flat sensor records (SDR)</td>
+            <td>Rich hierarchical JSON schema</td>
+          </tr>
+          <tr>
+            <td>Discoverability</td>
+            <td>Limited (requires sensor IDs)</td>
+            <td>Self-describing (hypermedia links)</td>
+          </tr>
+          <tr>
+            <td>Event Subscription</td>
+            <td>PET traps (SNMP-based)</td>
+            <td>SSE or webhook event subscriptions</td>
+          </tr>
+          <tr>
+            <td>Firmware Update</td>
+            <td>Vendor-specific</td>
+            <td>Standardized UpdateService</td>
+          </tr>
+          <tr>
+            <td>GPU Telemetry</td>
+            <td>Not supported</td>
+            <td>OEM extensions (NVIDIA DGX)</td>
+          </tr>
+          <tr>
+            <td>Security</td>
+            <td>Known vulnerabilities (cipher 0)</td>
+            <td>Modern TLS, role-based access control</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 5. Network Monitoring                                              -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>Network Monitoring</h3>
+    <p>
+      GPU clusters rely on high-performance networks (InfiniBand and/or high-speed Ethernet) for
+      inter-GPU communication (NCCL all-reduce, all-gather) and storage access. Network issues
+      directly translate into training slowdowns, job failures, and wasted GPU-hours. Comprehensive
+      fabric monitoring is therefore a top-tier SRE priority.
+    </p>
+
+    <h4>InfiniBand Monitoring</h4>
+    <pre><code class="language-bash"># ===== InfiniBand CLI Diagnostics =====
+
+# Show local HCA (Host Channel Adapter) port status
+ibstat
+# Key fields: State (Active = good), Physical state (LinkUp),
+# Rate (400 Gb/s for NDR), Base lid, Port GUID
+
+# Show port status with more detail
+ibstatus
+
+# Run full fabric diagnostic (checks all nodes and switches)
+# WARNING: This sends traffic across the fabric - run during maintenance window
+ibdiagnet
+# Produces reports on: topology, routing, port counters, errors
+
+# List all switches in the fabric
+ibswitches
+# Output: switch GUIDs and descriptions (e.g., "Quantum-2 QM9700")
+
+# Query port performance counters for a specific LID
+perfquery [LID] [port]
+# Key counters: PortXmitData, PortRcvData, PortXmitPkts, PortRcvPkts
+# Error counters: SymbolErrorCounter, LinkErrorRecoveryCounter,
+#                  LinkDownedCounter, PortRcvErrors, PortXmitDiscards
+
+# Reset port counters (useful before testing)
+perfquery -x [LID] [port]
+
+# Check IB subnet manager status
+sminfo
+# Shows SM priority and state (should be MASTER on primary SM)
+
+# List all nodes in the fabric
+ibnodes
+
+# Trace route between two nodes (identifies path through switches)
+ibtracert [source_LID] [dest_LID]
+
+# Query specific switch port counters
+smpquery portinfo [switch_LID] [port]
+
+# Check for nodes with errors across entire fabric
+ibdiagnet --ls 10 # check last 10 seconds of counters</code></pre>
+
+    <h4>NVIDIA UFM (Unified Fabric Manager)</h4>
+    <p>
+      UFM is NVIDIA's commercial InfiniBand fabric management platform. It provides a GUI and REST API
+      for monitoring and managing the entire IB fabric: topology discovery, health monitoring, event
+      alerting, adaptive routing configuration, SHARP (Scalable Hierarchical Aggregation and Reduction
+      Protocol) management, and telemetry collection. UFM is deployed as a server application (or VM)
+      connected to the IB fabric's management plane.
+    </p>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>UFM Feature</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Topology View</td>
+            <td>Visual fabric map showing all switches, links, and host connections with real-time status</td>
+          </tr>
+          <tr>
+            <td>Telemetry</td>
+            <td>Per-port bandwidth, packet rates, error counters at 1-second granularity</td>
+          </tr>
+          <tr>
+            <td>Events &amp; Alerts</td>
+            <td>Link down/up events, error threshold crossings, SM failovers</td>
+          </tr>
+          <tr>
+            <td>Adaptive Routing</td>
+            <td>Dynamic path selection to avoid congested or failed links</td>
+          </tr>
+          <tr>
+            <td>Cable Diagnostics</td>
+            <td>Identify degraded cables via BER (Bit Error Rate) monitoring</td>
+          </tr>
+          <tr>
+            <td>REST API</td>
+            <td><code>/ufmRest/app/</code> endpoints for integration with Prometheus, custom tooling</td>
+          </tr>
+          <tr>
+            <td>SHARP Management</td>
+            <td>Configure and monitor in-network compute for collective operations</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Ethernet Monitoring</h4>
+    <pre><code class="language-bash"># ===== Ethernet Monitoring Tools =====
+
+# LLDP: Discover neighbor switches and ports
+lldpctl
+# Shows: chassis name, port ID, VLAN, management address
+# Useful for verifying physical cabling matches logical design
+
+# SNMP: Query switch interface counters
+snmpwalk -v2c -c public switch01 IF-MIB::ifHCInOctets
+snmpwalk -v2c -c public switch01 IF-MIB::ifHCOutOctets
+snmpwalk -v2c -c public switch01 IF-MIB::ifInErrors
+snmpwalk -v2c -c public switch01 IF-MIB::ifOutErrors
+snmpwalk -v2c -c public switch01 IF-MIB::ifOperStatus
+
+# Interface error counters (on a Linux host)
+ethtool -S eth0 | grep -i error
+ethtool -S eth0 | grep -i drop
+ethtool -S eth0 | grep -i crc
+
+# Check NIC ring buffer and queue depths
+ethtool -g eth0
+ethtool -l eth0
+
+# Check link speed and duplex
+ethtool eth0
+# Speed: 100000Mb/s (100GbE), Duplex: Full
+
+# RoCE (RDMA over Converged Ethernet) diagnostics
+show_gids    # display GID table for RoCE
+rdma link     # show RDMA devices and their states
+ibv_devinfo   # InfiniBand verbs device info (works for RoCE too)
+
+# sFlow/NetFlow collection (on switch, sends to collector)
+# Configure on Cumulus Linux switch:
+# /etc/hsflowd.conf -> collector { ip = 10.10.1.50 udpport = 6343 }
+# Visualize in Grafana via sFlow-RT or ntopng</code></pre>
+
+    <div class="callout-warning">
+      <strong>Network Error Investigation Priority:</strong> In GPU clusters, even small increases
+      in network error rates can cause massive training performance degradation. A single flapping
+      InfiniBand link can slow down a 256-GPU NCCL all-reduce by 10-100x because the collective
+      operation runs at the speed of the slowest participant. When investigating job performance issues,
+      always check <code>perfquery</code> error counters and UFM events as one of the first steps.
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 6. SRE Practices for GPU Infrastructure                           -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>SRE Practices for GPU Infrastructure</h3>
+
+    <h4>Service Level Objectives (SLOs)</h4>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>SLO</th>
+            <th>Target</th>
+            <th>Error Budget</th>
+            <th>Measurement</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>GPU Node Availability</strong></td>
+            <td>99.9%</td>
+            <td>8.76 hours/year per node</td>
+            <td>Fraction of time node is in Slurm "idle" or "allocated" state (not "down" or "drain")</td>
+          </tr>
+          <tr>
+            <td><strong>Job Completion Rate</strong></td>
+            <td>99.5%</td>
+            <td>0.5% jobs may fail due to infra</td>
+            <td>Jobs completed / jobs submitted, excluding user errors (OOM from bad config, etc.)</td>
+          </tr>
+          <tr>
+            <td><strong>Scheduling Latency (P95)</strong></td>
+            <td>&lt;5 minutes</td>
+            <td>N/A</td>
+            <td>Time from job submission to job start for jobs where resources are available</td>
+          </tr>
+          <tr>
+            <td><strong>Network Fabric Availability</strong></td>
+            <td>99.99%</td>
+            <td>52.6 minutes/year</td>
+            <td>Fraction of time full-bisection bandwidth is available (no partitions)</td>
+          </tr>
+          <tr>
+            <td><strong>Storage Throughput</strong></td>
+            <td>&gt;90% of rated</td>
+            <td>N/A</td>
+            <td>Aggregate read/write throughput as fraction of theoretical max</td>
+          </tr>
+          <tr>
+            <td><strong>Mean Time to Detect (MTTD)</strong></td>
+            <td>&lt;5 minutes</td>
+            <td>N/A</td>
+            <td>Time from hardware failure to alert firing</td>
+          </tr>
+          <tr>
+            <td><strong>Mean Time to Recover (MTTR)</strong></td>
+            <td>&lt;4 hours</td>
+            <td>N/A</td>
+            <td>Time from detection to node back in service</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Incident Response</h4>
+    <div class="expandable">
+      <h4 class="expandable-header">Runbook: GPU Node Down (No Metrics)</h4>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># RUNBOOK: GPU Node Not Responding
+# Severity: High | On-call: GPU Infra Team
+# Trigger: GPUNodeDown alert (DCGM Exporter unreachable for >3 min)
+
+# Step 1: Verify node is actually unreachable
+ping -c 3 gpu-node-042
+ssh gpu-node-042 hostname 2>/dev/null
+
+# Step 2: If unreachable via in-band network, use BMC/IPMI
+ipmitool -I lanplus -H bmc-gpu-042.mgmt -U admin -P $BMC_PASS power status
+
+# Step 3: Check BMC system event log for hardware events
+ipmitool -I lanplus -H bmc-gpu-042.mgmt -U admin -P $BMC_PASS sel list | tail -20
+
+# Step 4: Try serial console to see kernel panic or hang
+ipmitool -I lanplus -H bmc-gpu-042.mgmt -U admin -P $BMC_PASS sol activate
+# Look for: kernel panic, OOM killer, GPU XID errors, NVLink errors
+# Use ~. to disconnect
+
+# Step 5: If OS is hung, attempt graceful reboot first
+ipmitool -I lanplus -H bmc-gpu-042.mgmt -U admin -P $BMC_PASS power soft
+sleep 120  # wait 2 minutes for graceful shutdown
+
+# Step 6: If still unresponsive, hard power cycle
+ipmitool -I lanplus -H bmc-gpu-042.mgmt -U admin -P $BMC_PASS power cycle
+
+# Step 7: After node boots, verify GPU health
+ssh gpu-node-042 nvidia-smi
+ssh gpu-node-042 dcgmi diag -r 2
+
+# Step 8: If node passes diagnostics, return to scheduler
+scontrol update NodeName=gpu-node-042 State=RESUME Reason="Recovered from outage"
+
+# Step 9: If diagnostics fail, drain and escalate
+scontrol update NodeName=gpu-node-042 State=DRAIN Reason="Hardware failure - ticket HW-12345"</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <h4 class="expandable-header">Runbook: High ECC Error Rate</h4>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># RUNBOOK: High ECC Error Rate
+# Severity: Warning -> Critical | On-call: GPU Infra Team
+# Trigger: GPUSingleBitECCHigh or GPUDoublebitECC alert
+
+# Step 1: Identify the affected GPU
+# From the alert: instance=gpu-node-017, gpu=3
+
+# Step 2: Check current ECC error counts
+ssh gpu-node-017 nvidia-smi -i 3 -q -d ECC
+# Look for:
+#   Volatile ECC Errors -> Single Bit -> count
+#   Volatile ECC Errors -> Double Bit -> count (ANY = critical)
+#   Aggregate ECC Errors -> counts (lifetime, persists across reboots)
+
+# Step 3: Check retired pages
+ssh gpu-node-017 nvidia-smi -i 3 -q -d RETIRED_PAGES
+# Retired pages: Single Bit ECC = correctable retirements
+# Pending page retirement = reboot needed to complete retirement
+
+# Step 4: Check row remapping (Ampere+/Hopper)
+ssh gpu-node-017 nvidia-smi -i 3 -q -d REMAPPED_ROWS
+# Remapping Failure = critical (no more spare rows)
+
+# Step 5: Decision
+# IF double-bit errors (XID 48) OR row remapping failure (XID 63):
+#   -> Drain node immediately, kill jobs, open RMA ticket
+scontrol update NodeName=gpu-node-017 State=DRAIN \
+  Reason="DBE/Row remap failure GPU 3 - RMA ticket HW-12346"
+
+# IF single-bit only, moderate rate (<50/hour):
+#   -> Monitor. Schedule replacement during next maintenance window.
+#   -> Reset volatile counters after noting them
+ssh gpu-node-017 nvidia-smi -i 3 -rac  # reset aggregate counters (CAUTION: lose history)
+
+# IF single-bit, high rate (>100/hour) or accelerating:
+#   -> Drain node within 24 hours, schedule GPU replacement</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <h4 class="expandable-header">Escalation Path &amp; Post-Incident Review</h4>
+      <div class="expandable-content">
+        <p><strong>Escalation Tiers:</strong></p>
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Tier</th>
+                <th>Response Time</th>
+                <th>Role</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>L1</td>
+                <td>15 minutes</td>
+                <td>On-call SRE</td>
+                <td>Acknowledge alert, triage, follow runbook, drain node if needed</td>
+              </tr>
+              <tr>
+                <td>L2</td>
+                <td>1 hour</td>
+                <td>Senior SRE / Specialist</td>
+                <td>Complex diagnosis (NVLink topology issues, multi-node failures, firmware bugs)</td>
+              </tr>
+              <tr>
+                <td>L3</td>
+                <td>4 hours</td>
+                <td>NVIDIA Support (Enterprise)</td>
+                <td>GPU/NVSwitch firmware issues, hardware design defects, RMA coordination</td>
+              </tr>
+              <tr>
+                <td>Incident Commander</td>
+                <td>30 minutes (major)</td>
+                <td>Engineering Manager</td>
+                <td>Coordinate multi-team response, stakeholder communication</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>Post-Incident Review (PIR) Template:</strong></p>
+        <ul>
+          <li><strong>Summary:</strong> What happened, duration, impact (GPU-hours lost, jobs affected)</li>
+          <li><strong>Timeline:</strong> Detection time, response time, mitigation time, resolution time</li>
+          <li><strong>Root Cause:</strong> 5-whys analysis. Hardware failure? Software bug? Config error?</li>
+          <li><strong>Impact:</strong> Number of GPUs affected, jobs killed, GPU-hours wasted, SLO impact</li>
+          <li><strong>What Went Well:</strong> Automation that worked, fast detection, effective runbooks</li>
+          <li><strong>What Can Be Improved:</strong> Missing monitoring, gaps in runbooks, slow escalation</li>
+          <li><strong>Action Items:</strong> Specific, assigned, time-bound improvements</li>
+        </ul>
+        <p>
+          Reviews are <strong>blameless</strong>. The goal is systemic improvement, not individual fault-finding.
+          Focus on the system: How did the system allow this failure to have this impact? How can the system
+          be made more resilient?
+        </p>
+      </div>
+    </div>
+
+    <h4>Change Management</h4>
+    <div class="expandable">
+      <h4 class="expandable-header">Driver, Firmware, and Kernel Updates</h4>
+      <div class="expandable-content">
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Update Type</th>
+                <th>Frequency</th>
+                <th>Risk Level</th>
+                <th>Strategy</th>
+                <th>Rollback</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>NVIDIA GPU Driver</strong></td>
+                <td>Quarterly (or as needed for CVEs)</td>
+                <td>High</td>
+                <td>Rolling update: drain 1 node at a time, update, run DCGM diag level 2, return to service</td>
+                <td>Keep previous driver package; <code>apt install nvidia-driver-535=535.129.03-1</code></td>
+              </tr>
+              <tr>
+                <td><strong>GPU Firmware (VBIOS)</strong></td>
+                <td>As released by NVIDIA</td>
+                <td>High</td>
+                <td>Maintenance window. Batch update via Redfish or <code>nvidia-smi</code>. Requires power cycle.</td>
+                <td>VBIOS has dual-bank; can flash back if needed (vendor-specific)</td>
+              </tr>
+              <tr>
+                <td><strong>NIC Firmware (ConnectX)</strong></td>
+                <td>As released by NVIDIA/Mellanox</td>
+                <td>Medium</td>
+                <td>Rolling update. <code>mlxfwmanager --online -u</code>. Requires NIC reset or reboot.</td>
+                <td><code>mlxfwmanager</code> supports firmware downgrade</td>
+              </tr>
+              <tr>
+                <td><strong>IB Switch Firmware</strong></td>
+                <td>As released by NVIDIA</td>
+                <td>High</td>
+                <td>Maintenance window. Update in stages (spine first, then leaf). Validate fabric health between stages.</td>
+                <td>Switch firmware supports A/B bank. Reboot to previous image.</td>
+              </tr>
+              <tr>
+                <td><strong>BMC Firmware</strong></td>
+                <td>As released by OEM</td>
+                <td>Medium</td>
+                <td>Rolling update via Redfish UpdateService. Does not affect host OS.</td>
+                <td>BMC has dual-bank flash; previous version preserved</td>
+              </tr>
+              <tr>
+                <td><strong>Linux Kernel</strong></td>
+                <td>Monthly (security) / Quarterly (feature)</td>
+                <td>High</td>
+                <td>Rolling update. Rebuild DKMS modules (nvidia, mlnx_ofed). Test on canary node first.</td>
+                <td>GRUB boot menu: select previous kernel at boot</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre><code class="language-bash"># Example: Rolling NVIDIA driver update workflow
+# Step 1: Drain node from scheduler
+scontrol update NodeName=gpu-node-001 State=DRAIN Reason="Driver update"
+
+# Step 2: Wait for running jobs to complete
+squeue -w gpu-node-001  # verify no jobs
+
+# Step 3: Stop GPU-dependent services
+ssh gpu-node-001 "systemctl stop dcgm-exporter nv-hostengine"
+
+# Step 4: Unload NVIDIA kernel modules
+ssh gpu-node-001 "nvidia-smi drain -p 0000:41:00.0 -m 1"  # enable drain mode
+ssh gpu-node-001 "rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia"
+
+# Step 5: Install new driver
+ssh gpu-node-001 "apt install nvidia-driver-550=550.54.15-1"
+
+# Step 6: Load new driver (or reboot)
+ssh gpu-node-001 "modprobe nvidia && nvidia-smi"
+
+# Step 7: Run diagnostics
+ssh gpu-node-001 "dcgmi diag -r 2"
+
+# Step 8: Return to service
+scontrol update NodeName=gpu-node-001 State=RESUME Reason="Driver update complete"</code></pre>
+      </div>
+    </div>
+
+    <h4>Capacity Planning</h4>
+    <div class="expandable">
+      <h4 class="expandable-header">Capacity Planning Metrics and Process</h4>
+      <div class="expandable-content">
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>Metric</th>
+                <th>Data Source</th>
+                <th>Review Cadence</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>GPU Compute</strong></td>
+                <td>Average GPU utilization, queue wait time, pending job count</td>
+                <td>DCGM, Slurm accounting</td>
+                <td>Weekly</td>
+              </tr>
+              <tr>
+                <td><strong>GPU Memory</strong></td>
+                <td>Peak FB usage per job, OOM frequency</td>
+                <td>DCGM, job logs</td>
+                <td>Monthly</td>
+              </tr>
+              <tr>
+                <td><strong>Power</strong></td>
+                <td>Total facility draw vs capacity, per-rack power, PUE</td>
+                <td>PDU meters, BMS</td>
+                <td>Monthly</td>
+              </tr>
+              <tr>
+                <td><strong>Cooling</strong></td>
+                <td>Supply/return water temperature delta, CRAH capacity utilization</td>
+                <td>BMS, environmental sensors</td>
+                <td>Monthly</td>
+              </tr>
+              <tr>
+                <td><strong>Network</strong></td>
+                <td>Peak fabric utilization, inter-switch link saturation</td>
+                <td>UFM, switch counters</td>
+                <td>Weekly</td>
+              </tr>
+              <tr>
+                <td><strong>Storage</strong></td>
+                <td>Capacity used/free, growth rate, IOPS headroom, throughput headroom</td>
+                <td>Lustre/GPFS monitoring</td>
+                <td>Weekly</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <strong>Planning Horizon:</strong> GPU clusters have long lead times (6-18 months for new hardware).
+          Capacity planning must project at least 12 months ahead. Key signals for expansion:
+          average queue wait time trending up, GPU utilization consistently &gt;85%, storage capacity
+          reaching 75%, or power/cooling approaching 80% of rated capacity.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 7. Logging                                                         -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>Centralized Logging at Scale</h3>
+    <p>
+      In a GPU cluster with hundreds of nodes, centralized log aggregation is essential. Logs must be
+      shipped from every node to a central system where they can be searched, correlated, and analyzed.
+      The two dominant stacks are <strong>ELK</strong> (Elasticsearch + Logstash + Kibana) and
+      <strong>Grafana Loki</strong> (with Promtail for log shipping).
+    </p>
+
+    <h4>Log Sources in a GPU Cluster</h4>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Log Source</th>
+            <th>Location / Command</th>
+            <th>Critical Events to Watch</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Kernel / dmesg</strong></td>
+            <td><code>journalctl -k</code>, <code>dmesg</code></td>
+            <td>XID errors, NVLink errors, PCIe AER, MCE (machine check), OOM killer, kernel panics</td>
+          </tr>
+          <tr>
+            <td><strong>NVIDIA GPU</strong></td>
+            <td><code>/var/log/syslog</code> (NVRM messages), <code>nvidia-bug-report.sh</code></td>
+            <td>XID events, driver errors, GPU fallen off bus, NVML initialization failures</td>
+          </tr>
+          <tr>
+            <td><strong>DCGM</strong></td>
+            <td><code>journalctl -u nv-hostengine</code></td>
+            <td>Health check failures, policy violations, GPU diagnostic results</td>
+          </tr>
+          <tr>
+            <td><strong>InfiniBand</strong></td>
+            <td><code>/var/log/syslog</code> (mlx5_core), <code>ibdiagnet</code> logs</td>
+            <td>Link down events, port errors, SM changes, cable/transceiver warnings</td>
+          </tr>
+          <tr>
+            <td><strong>Slurm Scheduler</strong></td>
+            <td><code>/var/log/slurm/slurmctld.log</code>, <code>sacct</code></td>
+            <td>Job failures (FAILED, NODE_FAIL, TIMEOUT), node drain events, scheduling errors</td>
+          </tr>
+          <tr>
+            <td><strong>Kubernetes</strong></td>
+            <td><code>kubectl logs</code>, kube-apiserver audit logs</td>
+            <td>Pod failures, GPU device plugin errors, scheduler failures, OOM events</td>
+          </tr>
+          <tr>
+            <td><strong>IB Switch Syslog</strong></td>
+            <td>Switch forwards to central syslog server</td>
+            <td>Port state changes, temperature alerts, SM failover, firmware events</td>
+          </tr>
+          <tr>
+            <td><strong>BMC/SEL</strong></td>
+            <td><code>ipmitool sel list</code>, Redfish log entries</td>
+            <td>PSU failures, fan failures, thermal events, memory errors (CPU-side)</td>
+          </tr>
+          <tr>
+            <td><strong>Storage (Lustre)</strong></td>
+            <td><code>/var/log/lustre/</code>, <code>lctl dk</code></td>
+            <td>OST failures, network timeouts, filesystem errors, slow I/O</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Grafana Loki Configuration</h4>
+    <pre><code class="language-yaml"># promtail-config.yml (deployed as DaemonSet on every node)
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki.monitoring.svc:3100/loki/api/v1/push
+
+scrape_configs:
+  # System journal (captures kernel/dmesg, systemd services)
+  - job_name: journal
+    journal:
+      max_age: 12h
+      labels:
+        job: systemd-journal
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+      - source_labels: ['__journal__hostname']
+        target_label: 'hostname'
+    pipeline_stages:
+      # Extract XID errors for fast querying
+      - match:
+          selector: '{job="systemd-journal"}'
+          stages:
+            - regex:
+                expression: 'NVRM: Xid.*: (?P&lt;xid_code&gt;\d+),'
+            - labels:
+                xid_code:
+
+  # Slurm logs
+  - job_name: slurm
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: slurm
+          __path__: /var/log/slurm/*.log
+
+  # NVIDIA driver logs from syslog
+  - job_name: nvidia-syslog
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: nvidia
+          __path__: /var/log/syslog
+    pipeline_stages:
+      - match:
+          selector: '{job="nvidia"}'
+          stages:
+            - regex:
+                expression: '.*NVRM.*'
+            - drop:
+                expression: '(?i)^(?!.*NVRM).*$'</code></pre>
+
+    <pre><code class="language-bash"># Useful LogQL queries in Grafana (for Loki)
+
+# Find all XID errors across the cluster in the last hour
+{job="systemd-journal"} |~ "Xid" | logfmt
+
+# XID 48 (double-bit ECC) events - critical
+{job="systemd-journal"} |~ "Xid.*: 48,"
+
+# GPU fallen off bus events
+{job="systemd-journal"} |~ "Xid.*: 64,"
+
+# OOM killer events
+{job="systemd-journal"} |~ "Out of memory|oom-kill"
+
+# Slurm node drain events
+{job="slurm"} |~ "drain|DRAIN"
+
+# InfiniBand link down events
+{job="systemd-journal"} |~ "mlx5_core.*link.*down"
+
+# Count XID errors per node over time (metric query)
+count_over_time({job="systemd-journal"} |~ "NVRM: Xid" [1h]) by (hostname)</code></pre>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- 8. Troubleshooting Playbook                                        -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>Troubleshooting Playbook</h3>
+    <p>
+      These are the most common failure scenarios an SRE will encounter in GPU cluster operations,
+      along with systematic diagnostic procedures.
+    </p>
+
+    <div class="expandable">
+      <h4 class="expandable-header">GPU Not Visible (<code>nvidia-smi</code> shows fewer GPUs)</h4>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># SCENARIO: Node should have 8 GPUs but nvidia-smi shows 7 (or 0)
+
+# Step 1: Check how many GPUs the kernel sees on PCIe bus
+lspci | grep -i nvidia
+# Count the entries. If fewer than expected, GPU is not on the PCIe bus.
+
+# Step 2: Check if it's a driver issue vs hardware issue
+lspci -vvv -s [missing_gpu_pci_slot] 2>/dev/null
+# If lspci sees the device but nvidia-smi doesn't, it's a driver issue
+# If lspci doesn't see it, it's a hardware/PCIe issue
+
+# Step 3: Check IOMMU settings (can hide devices)
+dmesg | grep -i iommu
+cat /proc/cmdline | grep iommu
+# For GPU passthrough: intel_iommu=on iommu=pt
+# For bare-metal GPU: intel_iommu=off (or iommu=pt)
+
+# Step 4: Check for XID 64 (GPU fell off bus)
+dmesg | grep -i "Xid.*64\|fell off"
+
+# Step 5: Check BMC system event log for PCIe errors
+ipmitool -I lanplus -H bmc-node.mgmt -U admin sel list | grep -i pci
+
+# Step 6: Hardware actions (requires physical access or remote hands)
+# - Power off node completely (not just reboot - full power cycle)
+# - Reseat the GPU in its PCIe slot
+# - Check PCIe riser card connection
+# - Check GPU power cables (8-pin/12-pin connectors)
+# - Power on and verify
+
+# Step 7: If GPU returns, run diagnostics
+nvidia-smi
+dcgmi diag -r 3  # full diagnostic
+
+# Step 8: If GPU still missing after reseat + power cycle = RMA</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <h4 class="expandable-header">Training Job Running Slow</h4>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># SCENARIO: Distributed training throughput (samples/sec) below expected
+
+# Step 1: Check for thermal throttling
+nvidia-smi -q -d PERFORMANCE
+# Look for: "SW Thermal Slowdown: Active" or "HW Thermal Slowdown: Active"
+nvidia-smi --query-gpu=temperature.gpu,clocks_throttle_reasons.active \
+  --format=csv -l 5
+
+# Step 2: Check GPU clock speeds (should be at max for training)
+nvidia-smi -q -d CLOCK
+# Compare "Graphics" and "Memory" clocks vs max clocks
+# If clocks are low: check power limit, thermal, or driver issue
+
+# Step 3: Check NVLink health and bandwidth
+nvidia-smi nvlink -s    # NVLink status
+nvidia-smi nvlink -e    # NVLink error counters
+# Any non-zero CRC or replay errors = degraded NVLink
+
+# Step 4: Check NCCL topology and algorithm selection
+# Set NCCL debug logging:
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=ALL
+# Re-run training and check logs for:
+# - "Using network" -> should show IB or NVLink, not Socket
+# - "Tree" or "Ring" algorithm selection
+# - Any warnings about topology or speed mismatches
+
+# Step 5: Check InfiniBand for errors
+ibstat          # verify port is Active, rate matches expected (e.g., 400 Gb/s)
+perfquery       # check error counters
+ibdiagnet -ls 30  # check port counters over 30 seconds
+
+# Step 6: Check for PCIe bandwidth bottleneck
+nvidia-smi -q -d PCIE
+# Verify: Link Gen = 5 (PCIe 5.0), Link Width = x16
+# If degraded (e.g., Gen3 x8), reseat GPU or check riser
+
+# Step 7: Check CPU/memory bottleneck (data loading)
+htop  # CPU utilization
+iostat -xz 1 5  # disk I/O (is data loading starving GPUs?)
+# If CPU at 100% with GPUs idle: increase data loader workers
+
+# Step 8: Check storage throughput
+dd if=/dev/zero of=/lustre/scratch/test.tmp bs=1M count=4096 oflag=direct
+# Should match expected Lustre throughput
+
+# Step 9: Profile the training job
+# Use NVIDIA Nsight Systems:
+nsys profile -o profile_output python train.py --epochs 1
+# Use PyTorch Profiler:
+# torch.profiler.profile() in code</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <h4 class="expandable-header">Network Partition (Nodes Cannot Communicate)</h4>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># SCENARIO: Some nodes cannot reach other nodes over InfiniBand
+
+# Step 1: Check local IB port status
+ibstat
+# State should be: Active
+# Physical state should be: LinkUp
+# Rate should match expected (e.g., 400 for NDR)
+
+# Step 2: Check subnet manager status
+sminfo
+# Verify SM is in MASTER state
+# If no SM: check if OpenSM or UFM is running on the SM node
+
+# Step 3: Check if we can see the destination
+ibping -G [destination_port_guid]
+# If timeout: path is broken
+
+# Step 4: Trace the path to see where it breaks
+ibtracert [source_LID] [dest_LID]
+# Identify which hop fails
+
+# Step 5: Check the switch port at the failing hop
+smpquery portinfo [switch_LID] [port]
+# Look for: PhysState, LinkSpeedActive, errors
+
+# Step 6: Check for cable issues on the suspect link
+# In UFM: check BER (Bit Error Rate) for the link
+# Via CLI:
+perfquery [switch_LID] [port]
+# Look for non-zero: SymbolErrorCounter, LinkErrorRecoveryCounter,
+#                     LinkDownedCounter, PortRcvErrors
+
+# Step 7: Check if issue is transient (flapping link)
+# Watch for link up/down events:
+journalctl -f -u opensm  # or check UFM events
+
+# Step 8: Resolution
+# Bad cable: Replace the cable, verify with ibdiagnet
+# Bad switch port: Move cable to spare port, report HW issue
+# SM issue: Restart OpenSM or UFM, verify failover works
+# Configuration: Check routing tables, LID assignment, P_Key config</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <h4 class="expandable-header">Storage Performance Degraded</h4>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># SCENARIO: Lustre filesystem showing slow I/O
+
+# Step 1: Check Lustre filesystem status
+lctl dl                    # list Lustre devices
+lfs df -h                  # show filesystem capacity and usage per OST
+lfs check servers          # verify connectivity to all MDTs and OSTs
+
+# Step 2: Check for OST imbalance
+lfs df -h | sort -k5 -rn  # sort by usage percentage
+# If some OSTs >95% while others are <50%, data is imbalanced
+# Fix: lfs migrate to rebalance, or lfs setstripe for new files
+
+# Step 3: Check network path to storage
+# From a GPU node:
+ping -c 5 lustre-oss-001            # basic connectivity
+ib_write_bw lustre-oss-001          # IB bandwidth to storage server
+# Compare against expected (e.g., 200 Gb/s per link)
+
+# Step 4: Check for degraded RAID on OSS (storage servers)
+ssh lustre-oss-001 "mdadm --detail /dev/md0"    # if using mdraid
+ssh lustre-oss-001 "zpool status"                 # if using ZFS
+# Degraded RAID = reduced throughput + rebuild I/O competing
+
+# Step 5: Check for heavy metadata operations (small file storm)
+lctl get_param mdt.*.stats | grep -i open
+# High open/close rates = metadata bottleneck
+# Solution: increase MDT capacity, use DNE (Distributed Namespace)
+
+# Step 6: Check client-side Lustre tuning
+lctl get_param osc.*.max_rpcs_in_flight   # should be 16-64
+lctl get_param osc.*.max_pages_per_rpc     # should be 4096 (16MB)
+lctl get_param llite.*.max_read_ahead_mb   # should be 256+
+
+# Step 7: Check for network congestion between compute and storage
+# On IB fabric: check ISL (Inter-Switch Link) utilization in UFM
+# Congested ISLs = need more bandwidth or better routing
+
+# Step 8: Temporary mitigation
+# If one OST is the bottleneck, mark it unavailable for new writes:
+# lctl set_param osc.*.active=0  (CAUTION: makes existing data on that OST unreachable)
+# Better: Contact storage team for targeted investigation</code></pre>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Troubleshooting Principle:</strong> Always start with the most common and easily checked
+      causes before moving to exotic explanations. In GPU clusters, the most frequent root causes
+      of performance issues are, in order: (1) thermal throttling, (2) degraded NVLink/PCIe links,
+      (3) network cable issues, (4) application misconfiguration (wrong NCCL settings, wrong topology),
+      (5) storage bottleneck. Hardware failure (dead GPU, bad memory) is less common but more severe.
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- Knowledge Check                                                    -->
+  <!-- ================================================================== -->
+  <div class="info-card">
+    <h3>Knowledge Check: Monitoring &amp; SRE</h3>
+
+    <div class="quiz-question" data-question-id="monitoring-sre-q1" data-feedback-correct="Correct! XID 48 is a double-bit (uncorrectable) ECC error. The data in GPU memory has been corrupted and cannot be recovered. The affected GPU must be taken out of service and replaced. This is a drain-immediately situation." data-feedback-incorrect="Not quite. XID 48 specifically indicates a double-bit ECC error, which is an uncorrectable memory error. The GPU cannot reliably store data and must be replaced. Review the XID error table above.">
+      <p><strong>Question 1:</strong> A monitoring alert fires for XID 48 on GPU 3 of node <code>gpu-node-017</code>. What is the correct immediate response?</p>
+      <div class="quiz-answer" data-correct="false">A) Reboot the node and re-run the failed job. XID 48 is a transient driver error that clears on restart.</div>
+      <div class="quiz-answer" data-correct="false">B) Update the NVIDIA driver to the latest version. XID 48 indicates a driver compatibility issue.</div>
+      <div class="quiz-answer" data-correct="true">C) Drain the node from the scheduler immediately, kill jobs on the affected GPU, and open an RMA ticket for GPU replacement. XID 48 is a double-bit (uncorrectable) ECC error.</div>
+      <div class="quiz-answer" data-correct="false">D) Run <code>dcgmi diag -r 3</code> to assess the severity. XID 48 may or may not require hardware replacement depending on the diagnostic result.</div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question" data-question-id="monitoring-sre-q2" data-feedback-correct="Correct! The rate() function in PromQL calculates the per-second rate of counter increase over the specified time window. Combined with a threshold comparison, this query fires when the single-bit ECC error rate exceeds 100 per hour, sustained for 10 minutes. This pattern avoids alerting on brief spikes while catching sustained degradation." data-feedback-incorrect="Not quite. The correct answer involves using rate() with the ECC single-bit counter, a threshold indicating significant error accumulation, and a 'for' duration to avoid false positives on brief spikes. Review the Prometheus alert rules section above.">
+      <p><strong>Question 2:</strong> Which PromQL expression correctly alerts when a GPU is experiencing a <em>sustained</em> high rate of correctable (single-bit) ECC errors?</p>
+      <div class="quiz-answer" data-correct="false">A) <code>DCGM_FI_DEV_ECC_SBE_VOL_TOTAL > 100</code> &mdash; alert when total count exceeds 100.</div>
+      <div class="quiz-answer" data-correct="true">B) <code>rate(DCGM_FI_DEV_ECC_SBE_VOL_TOTAL[1h]) > 100</code> with <code>for: 10m</code> &mdash; alert when error rate exceeds 100/hour for 10 minutes.</div>
+      <div class="quiz-answer" data-correct="false">C) <code>delta(DCGM_FI_DEV_ECC_SBE_VOL_TOTAL[5m]) == 0</code> &mdash; alert when errors stop accumulating (GPU is failing silently).</div>
+      <div class="quiz-answer" data-correct="false">D) <code>DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0</code> &mdash; this catches all ECC errors including single-bit ones.</div>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question" data-question-id="monitoring-sre-q3" data-feedback-correct="Correct! The BMC (Baseboard Management Controller) operates on a physically separate network interface and has its own embedded processor, independent of the host OS. This means you can access the BMC's serial-over-LAN console, read hardware sensors, check event logs, and power cycle the server even when the operating system has completely crashed or the node is unresponsive on the data network. This is why the out-of-band management network is critical infrastructure." data-feedback-incorrect="Not quite. The key advantage of BMC/IPMI is out-of-band management: it works independently of the host operating system. Even when the OS is frozen, crashed, or the node is completely hung, the BMC is still operational on its dedicated management network. Review the BMC / IPMI / Redfish section above.">
+      <p><strong>Question 3:</strong> A GPU node is completely unresponsive &mdash; it does not reply to ping, SSH connections time out, and there is no in-band network connectivity. Which management path allows you to diagnose the issue and potentially recover the node without physical access?</p>
+      <div class="quiz-answer" data-correct="false">A) Use <code>kubectl exec</code> to access a debugging container on the node and run diagnostics from within Kubernetes.</div>
+      <div class="quiz-answer" data-correct="true">B) Use IPMI/Redfish via the out-of-band BMC management network to access the serial console (<code>ipmitool sol activate</code>), check the system event log, and power cycle the node.</div>
+      <div class="quiz-answer" data-correct="false">C) SSH to an adjacent node in the same rack and use <code>ipmitool</code> locally over the data network to reach the unresponsive node's IPMI interface.</div>
+      <div class="quiz-answer" data-correct="false">D) Wait for the hardware watchdog timer to automatically reboot the node. All GPU nodes have hardware watchdogs enabled by default that will recover within 5 minutes.</div>
+      <div class="quiz-feedback"></div>
+    </div>
+  </div>
+
+</section>

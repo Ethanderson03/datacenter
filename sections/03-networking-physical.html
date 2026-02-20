@@ -1,0 +1,1309 @@
+<section id="networking-physical" class="content-section" data-layer="2">
+
+  <!-- ============================================================
+       SECTION HEADER
+       ============================================================ -->
+  <div class="section-header">
+    <div class="section-number">03</div>
+    <h1>Physical Networking &amp; RDMA Fabric</h1>
+    <p class="section-subtitle">InfiniBand, RoCE, GPUDirect, and the cabling that binds a GPU Superpod together</p>
+  </div>
+
+  <!-- ============================================================
+       1. INFINIBAND DEEP DIVE
+       ============================================================ -->
+  <div class="subsection" id="infiniband-deep-dive">
+    <h2>1. InfiniBand Deep Dive</h2>
+
+    <div class="callout callout-concept">
+      <strong>What is InfiniBand?</strong> InfiniBand (IB) is a lossless, switched-fabric interconnect designed from the ground up for Remote Direct Memory Access (RDMA). Unlike Ethernet, which was originally a shared-medium broadcast protocol adapted over decades for datacenter use, InfiniBand was purpose-built for low-latency, high-bandwidth, credit-based communication between compute nodes. It provides kernel-bypass data transfers where application memory is registered with the NIC (called an HCA&mdash;Host Channel Adapter in IB terminology) and data moves directly between application buffers across the network without any CPU intervention on the data path.
+    </div>
+
+    <!-- IB Speed Generations Table -->
+    <h3>InfiniBand Speed Generations</h3>
+    <p>InfiniBand defines per-lane signaling rates. Links are assembled from 1x, 4x, or 12x lanes. In HPC/AI, 4x links are standard. Each generation roughly doubles the per-lane rate of the previous.</p>
+
+    <div class="table-wrapper">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Generation</th>
+            <th>Per-Lane Rate</th>
+            <th>Encoding</th>
+            <th>Effective Per-Lane</th>
+            <th>4x Link BW</th>
+            <th>Year (approx.)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>SDR</strong></td>
+            <td>2.5 Gb/s</td>
+            <td>8b/10b</td>
+            <td>2.0 Gb/s</td>
+            <td>8 Gb/s</td>
+            <td>2001</td>
+          </tr>
+          <tr>
+            <td><strong>DDR</strong></td>
+            <td>5.0 Gb/s</td>
+            <td>8b/10b</td>
+            <td>4.0 Gb/s</td>
+            <td>16 Gb/s</td>
+            <td>2005</td>
+          </tr>
+          <tr>
+            <td><strong>QDR</strong></td>
+            <td>10.0 Gb/s</td>
+            <td>8b/10b</td>
+            <td>8.0 Gb/s</td>
+            <td>32 Gb/s</td>
+            <td>2008</td>
+          </tr>
+          <tr>
+            <td><strong>FDR</strong></td>
+            <td>14.0625 Gb/s</td>
+            <td>64b/66b</td>
+            <td>13.64 Gb/s</td>
+            <td>54.5 Gb/s (~56)</td>
+            <td>2011</td>
+          </tr>
+          <tr>
+            <td><strong>EDR</strong></td>
+            <td>25.78125 Gb/s</td>
+            <td>64b/66b</td>
+            <td>25.0 Gb/s</td>
+            <td>100 Gb/s</td>
+            <td>2014</td>
+          </tr>
+          <tr>
+            <td><strong>HDR</strong></td>
+            <td>50.0 Gb/s</td>
+            <td>64b/66b</td>
+            <td>48.48 Gb/s</td>
+            <td>200 Gb/s</td>
+            <td>2018</td>
+          </tr>
+          <tr class="highlight-row">
+            <td><strong>NDR</strong></td>
+            <td>100.0 Gb/s</td>
+            <td>64b/66b + FEC</td>
+            <td>~96.97 Gb/s</td>
+            <td>400 Gb/s</td>
+            <td>2022</td>
+          </tr>
+          <tr class="highlight-row">
+            <td><strong>XDR</strong></td>
+            <td>200.0 Gb/s</td>
+            <td>64b/66b + FEC</td>
+            <td>~193.94 Gb/s</td>
+            <td>800 Gb/s</td>
+            <td>2025</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>Link width notation:</strong> You will see ports labeled as <code>4X NDR</code> or <code>4X HDR</code>. This means 4 lanes at that generation's per-lane rate. A <code>4X NDR</code> port delivers 4 &times; 100 Gb/s = 400 Gb/s signaling rate. 12x links exist in the spec but are extremely rare in modern deployments&mdash;4x is the universal standard for compute interconnects.
+    </div>
+
+    <!-- Subnet Manager -->
+    <h3>Subnet Manager (SM)</h3>
+    <p>An InfiniBand fabric <strong>requires</strong> a Subnet Manager to function. Unlike Ethernet where switches independently learn MAC addresses and forward frames, IB is centrally managed. The SM discovers the fabric topology, assigns Local Identifiers (LIDs) to every port, computes forwarding tables (linear forwarding tables in each switch), and pushes them out. Without a running SM, no traffic flows.</p>
+
+    <div class="info-card">
+      <h4>OpenSM</h4>
+      <p>The open-source reference implementation of the IB Subnet Manager, part of the OFED (OpenFabrics Enterprise Distribution) stack. OpenSM runs as a daemon on a management node (or on a switch with a management CPU). It supports multiple routing algorithms:</p>
+      <ul>
+        <li><strong>Min-Hop:</strong> Default algorithm; routes based on minimum hop count</li>
+        <li><strong>Up/Down:</strong> Prevents routing loops in non-pure-fat-tree topologies by assigning direction to links</li>
+        <li><strong>Fat-Tree:</strong> Optimized for fat-tree topologies; gives balanced dispersive routing across uplinks</li>
+        <li><strong>DFSSSP:</strong> Deadlock-Free Single-Source Shortest Path for arbitrary topologies</li>
+      </ul>
+      <p>OpenSM typically recalculates routes on topology changes (link up/down events). The <code>-R</code> flag sets the routing engine. Configuration lives in <code>/etc/opensm/opensm.conf</code>.</p>
+    </div>
+
+    <div class="info-card">
+      <h4>NVIDIA UFM (Unified Fabric Manager)</h4>
+      <p>UFM is NVIDIA's commercial IB fabric management platform. It provides an embedded SM plus advanced features far beyond OpenSM:</p>
+      <ul>
+        <li><strong>Real-time telemetry:</strong> Per-port counters, error rates, congestion detection</li>
+        <li><strong>Adaptive routing:</strong> Dynamically adjusts paths based on congestion signals</li>
+        <li><strong>SHARP aggregation management:</strong> Configures in-network computing trees</li>
+        <li><strong>Health monitoring:</strong> Detects BER (Bit Error Rate) degradation, flapping links, and cable faults before they cause job failures</li>
+        <li><strong>Event-driven automation:</strong> REST API and webhook integrations for alerting/remediation</li>
+        <li><strong>Topology visualization:</strong> Web GUI with full fabric map</li>
+      </ul>
+      <p>In production Superpod deployments, UFM is essentially mandatory. It runs on a dedicated management node and communicates with the IB fabric via in-band management datagrams (MADs).</p>
+    </div>
+
+    <!-- RDMA Concepts -->
+    <h3>RDMA Core Concepts</h3>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="expand-icon">+</span> Queue Pairs (QP), Completion Queues (CQ), and Memory Regions (MR)
+      </button>
+      <div class="expandable-content">
+        <p>RDMA communication is built on three fundamental kernel-bypass objects:</p>
+
+        <h4>Queue Pairs (QP)</h4>
+        <p>A QP is the fundamental communication endpoint. Each QP consists of a <strong>Send Queue (SQ)</strong> and a <strong>Receive Queue (RQ)</strong>. Applications post Work Requests (WRs) to these queues. The HCA processes WRs asynchronously without kernel involvement. QP types include:</p>
+        <ul>
+          <li><strong>RC (Reliable Connected):</strong> Point-to-point, guaranteed delivery, in-order. Used for most HPC/AI traffic (NCCL collective operations, MPI point-to-point).</li>
+          <li><strong>UC (Unreliable Connected):</strong> Point-to-point, no ACK/retransmit. Rarely used.</li>
+          <li><strong>UD (Unreliable Datagram):</strong> One-to-any, message size limited to MTU. Used for management traffic, service discovery.</li>
+          <li><strong>XRC (Extended Reliable Connected):</strong> Reduces QP count by sharing receive queues. Important for large-scale jobs where N&times;N QPs would exhaust HCA resources.</li>
+        </ul>
+
+        <h4>Completion Queues (CQ)</h4>
+        <p>When the HCA finishes processing a WR, it posts a Completion Queue Entry (CQE) to the associated CQ. Applications poll the CQ (low-latency) or block on an event (lower CPU cost). A single CQ can serve multiple QPs. Completion status tells you if the operation succeeded or reports error codes (e.g., <code>IBV_WC_REM_ACCESS_ERR</code> for remote memory access violations).</p>
+
+        <h4>Memory Regions (MR)</h4>
+        <p>Before any RDMA transfer, memory must be <strong>registered</strong> with the HCA via <code>ibv_reg_mr()</code>. Registration pins the pages in physical memory (preventing swapout), creates a virtual-to-physical mapping in the HCA's page tables, and returns a pair of keys:</p>
+        <ul>
+          <li><strong>lkey (Local Key):</strong> Used by the local side to reference this memory in WRs</li>
+          <li><strong>rkey (Remote Key):</strong> Shared with remote side to allow RDMA Read/Write into this region</li>
+        </ul>
+        <p>Memory registration is expensive (kernel call, TLB shootdowns). Production codes pre-register buffers. Libraries like UCX and NCCL maintain registration caches to amortize cost.</p>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="expand-icon">+</span> Verbs API (libibverbs) and RDMA Operations
+      </button>
+      <div class="expandable-content">
+        <p>The <strong>Verbs API</strong> (provided by <code>libibverbs</code>) is the standard programming interface for RDMA. It is intentionally low-level, giving applications direct control over HCA resources. The typical workflow:</p>
+        <ol>
+          <li><code>ibv_get_device_list()</code> &mdash; enumerate HCAs in the system</li>
+          <li><code>ibv_open_device()</code> &mdash; open a device context</li>
+          <li><code>ibv_alloc_pd()</code> &mdash; create a Protection Domain (isolation boundary)</li>
+          <li><code>ibv_reg_mr()</code> &mdash; register memory</li>
+          <li><code>ibv_create_cq()</code> &mdash; create completion queue</li>
+          <li><code>ibv_create_qp()</code> &mdash; create queue pair</li>
+          <li>Transition QP through states: RESET &rarr; INIT &rarr; RTR &rarr; RTS</li>
+          <li><code>ibv_post_send()</code> / <code>ibv_post_recv()</code> &mdash; post work requests</li>
+          <li><code>ibv_poll_cq()</code> &mdash; poll for completions</li>
+        </ol>
+
+        <h4>RDMA Operation Types</h4>
+        <div class="table-wrapper">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>Operation</th>
+                <th>Initiator</th>
+                <th>Remote CPU Involved?</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Send / Receive</strong></td>
+                <td>Sender</td>
+                <td>Yes (must pre-post receive)</td>
+                <td>Two-sided operation. Receiver must have a Receive WR posted. Data lands in receiver's buffer. Like traditional message passing.</td>
+              </tr>
+              <tr>
+                <td><strong>RDMA Write</strong></td>
+                <td>Writer</td>
+                <td>No</td>
+                <td>One-sided. Writer specifies remote address + rkey. Data is placed directly into remote memory. Remote CPU is unaware. Used heavily by NCCL for GPU-to-GPU transfers.</td>
+              </tr>
+              <tr>
+                <td><strong>RDMA Read</strong></td>
+                <td>Reader</td>
+                <td>No</td>
+                <td>One-sided. Reader pulls data from remote memory. Remote CPU is unaware. Useful for polling remote status or fetching shared state.</td>
+              </tr>
+              <tr>
+                <td><strong>Atomic (CAS, Fetch&amp;Add)</strong></td>
+                <td>Initiator</td>
+                <td>No</td>
+                <td>Performs atomic read-modify-write on remote memory. Compare-and-Swap (CAS) and Fetch-and-Add are the two standard atomics. Executed by the remote HCA, not the remote CPU.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="expand-icon">+</span> Partitioning (PKeys) &mdash; VLANs for InfiniBand
+      </button>
+      <div class="expandable-content">
+        <p>InfiniBand uses <strong>Partition Keys (PKeys)</strong> to segment traffic on a shared fabric, analogous to VLANs on Ethernet. Each PKey is a 16-bit value. The high bit indicates <strong>full</strong> vs. <strong>limited</strong> membership:</p>
+        <ul>
+          <li><strong>Full member (0x8xxx):</strong> Can communicate with any member of the partition (full or limited)</li>
+          <li><strong>Limited member (0x0xxx):</strong> Can only communicate with full members, not other limited members</li>
+        </ul>
+        <p>Every IB port has a PKey table (up to 128 entries on ConnectX HCAs). The <strong>default partition</strong> is PKey <code>0x7FFF</code> (limited) or <code>0xFFFF</code> (full), and all ports must be members. The SM configures PKey tables based on the <code>partitions.conf</code> file.</p>
+        <p><strong>Use cases in Superpod:</strong></p>
+        <ul>
+          <li>Separate storage traffic (Lustre/GPFS) from compute (MPI/NCCL) traffic</li>
+          <li>Isolate tenants in multi-tenant clusters</li>
+          <li>Restrict management traffic to admin partitions</li>
+        </ul>
+        <p>Key difference from VLANs: PKeys provide membership enforcement at the HCA level. A node cannot forge PKey membership&mdash;the SM controls the PKey table, and the HCA enforces it in hardware.</p>
+      </div>
+    </div>
+
+    <!-- IB vs Ethernet Philosophy -->
+    <h3>InfiniBand vs Ethernet: Design Philosophy</h3>
+    <div class="info-card">
+      <h4>Credit-Based Flow Control</h4>
+      <p>InfiniBand is <strong>lossless by design</strong>. Every link uses credit-based flow control: a sender can only transmit when it has credits from the receiver, meaning the receiver has buffer space. This is fundamentally different from Ethernet, where packets are sent optimistically and may be dropped if a switch buffer overflows.</p>
+      <ul>
+        <li><strong>InfiniBand:</strong> Sender checks credits &rarr; transmits only if receiver has buffer space &rarr; <em>zero packet drops on a healthy fabric</em>. Congestion manifests as back-pressure (reduced throughput), not drops.</li>
+        <li><strong>Ethernet:</strong> Sender transmits immediately &rarr; switch may drop if buffer overflows &rarr; relies on TCP retransmits for reliability. Drops are expected and handled by upper layers.</li>
+      </ul>
+      <p>This is why InfiniBand achieves consistently lower latency: there is no retransmission overhead, no TCP slow-start, and the fabric provides hardware-level reliability guarantees. For RDMA workloads where a single dropped packet can stall a GPU collective operation across thousands of GPUs, this lossless guarantee is critical.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       2. RoCE (RDMA over Converged Ethernet)
+       ============================================================ -->
+  <div class="subsection" id="roce-rdma-over-ethernet">
+    <h2>2. RoCE (RDMA over Converged Ethernet)</h2>
+
+    <div class="callout callout-concept">
+      <strong>Why RoCE?</strong> RoCE enables RDMA semantics (kernel bypass, zero-copy, low latency) over standard Ethernet infrastructure. This lets organizations leverage existing Ethernet switches, cabling, and operational expertise while getting most of the performance benefits of RDMA. It is especially compelling when InfiniBand's specialized switch infrastructure is not available or when Ethernet is already deployed at scale.
+    </div>
+
+    <h3>RoCEv1 vs RoCEv2</h3>
+    <div class="table-wrapper">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>RoCEv1</th>
+            <th>RoCEv2</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Encapsulation</strong></td>
+            <td>IB transport over Ethernet (EtherType 0x8915)</td>
+            <td>IB transport over UDP/IP over Ethernet</td>
+          </tr>
+          <tr>
+            <td><strong>Routing</strong></td>
+            <td>L2 only (same VLAN / broadcast domain)</td>
+            <td>L3 routable (crosses subnets)</td>
+          </tr>
+          <tr>
+            <td><strong>UDP Port</strong></td>
+            <td>N/A</td>
+            <td>Destination port 4791; source port is a hash of QP/flow for ECMP</td>
+          </tr>
+          <tr>
+            <td><strong>ECMP Support</strong></td>
+            <td>No (L2 only)</td>
+            <td>Yes&mdash;switches hash on UDP source port for multi-path load balancing</td>
+          </tr>
+          <tr>
+            <td><strong>Deployment</strong></td>
+            <td>Legacy, rarely used</td>
+            <td>Industry standard for all modern RDMA-over-Ethernet deployments</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>In practice, <strong>RoCEv2 is the only version deployed today</strong>. The UDP encapsulation solved the critical limitation of RoCEv1 (L2-only), enabling ECMP across multi-tier leaf-spine fabrics.</p>
+
+    <!-- Lossless Ethernet -->
+    <h3>Making Ethernet Lossless: PFC, ECN, and DCQCN</h3>
+    <p>RDMA assumes a lossless transport. A single dropped packet causes an RDMA operation to fail at the transport level (unlike TCP, which retransmits transparently). Ethernet is inherently lossy, so achieving lossless behavior requires careful configuration of several mechanisms working together:</p>
+
+    <div class="info-card">
+      <h4>Priority Flow Control (PFC) &mdash; IEEE 802.1Qbb</h4>
+      <p>PFC extends Ethernet pause frames to work on a <strong>per-priority basis</strong> (using 802.1p priority bits in the VLAN tag). When a switch input buffer for a given priority exceeds a threshold, it sends a PFC pause frame to the upstream sender for that priority only, leaving other priorities unaffected.</p>
+      <ul>
+        <li>RoCEv2 traffic is typically assigned to <strong>priority 3</strong> (configurable via DSCP-to-priority mapping)</li>
+        <li>PFC is enabled <strong>only for the RoCE priority class</strong>&mdash;other traffic classes (management, best-effort) remain lossy</li>
+        <li><strong>PFC deadlock risk:</strong> If a circular buffer dependency forms across switches, PFC pause frames can cascade and deadlock the entire fabric. This is a real operational risk in leaf-spine topologies and requires careful buffer tuning and sometimes PFC watchdog timers.</li>
+      </ul>
+      <p>PFC configuration example (NVIDIA Spectrum switch, Cumulus Linux):</p>
+      <pre><code># Enable PFC on priority 3 only
+nv set qos pfc priority 3 enable on
+nv set interface swp1-64 qos pfc priority 3 enable on
+
+# Set PFC buffer thresholds
+nv set qos pfc priority 3 xoff-threshold 80000
+nv set qos pfc priority 3 xon-threshold 40000</code></pre>
+    </div>
+
+    <div class="info-card">
+      <h4>Explicit Congestion Notification (ECN) &mdash; RFC 3168</h4>
+      <p>ECN is the <strong>early-warning system</strong> that prevents PFC from ever firing under normal conditions. When a switch buffer occupancy exceeds a configured threshold (but before it is full enough to trigger PFC), the switch marks packets by setting the ECN bits in the IP header to <code>CE</code> (Congestion Experienced, binary <code>11</code>).</p>
+      <ul>
+        <li>ECN operates at L3 (IP header) and works per-packet</li>
+        <li>The receiver detects the CE marking and signals congestion back to the sender via a CNP (Congestion Notification Packet)</li>
+        <li>The sender reduces its injection rate in response</li>
+        <li>ECN thresholds must be set <strong>lower</strong> than PFC thresholds so that rate reduction kicks in before any pause is needed</li>
+      </ul>
+    </div>
+
+    <div class="info-card">
+      <h4>DCQCN (Data Center QoS Congestion Notification)</h4>
+      <p>DCQCN is the end-to-end congestion control algorithm used in RoCEv2 networks. It combines ECN marking at the switches with rate-limiting at the sender NIC. The algorithm:</p>
+      <ol>
+        <li><strong>Switch marks packets with ECN</strong> when queue depth exceeds threshold (RED/WRED-style probabilistic marking)</li>
+        <li><strong>Receiver generates CNP</strong> (Congestion Notification Packet) back to sender when it sees CE-marked packets</li>
+        <li><strong>Sender reduces rate</strong> by a configurable factor (alpha) upon receiving CNP</li>
+        <li><strong>Sender gradually recovers rate</strong> using timer-based increase, byte-counter-based increase, or a combination (similar to TCP's AIMD but tuned for datacenter RTTs of ~10&micro;s)</li>
+      </ol>
+      <p>DCQCN parameters on ConnectX NICs are tuned via <code>mlxreg</code> or <code>mlnx_qos</code>. Key knobs include the rate-reduction factor, recovery timer interval, and the number of CNPs before rate cut. Mistuning causes either excessive PFC (thresholds too high) or unnecessary throughput reduction (thresholds too low).</p>
+    </div>
+
+    <!-- IB vs RoCE Tab Comparison -->
+    <h3>InfiniBand vs RoCE: Side-by-Side Comparison</h3>
+    <div class="tab-group">
+      <div class="tab-buttons">
+        <button class="tab-btn active" data-tab="tab-ib">InfiniBand</button>
+        <button class="tab-btn" data-tab="tab-roce">RoCE (v2)</button>
+        <button class="tab-btn" data-tab="tab-compare">Comparison Matrix</button>
+      </div>
+
+      <div class="tab-content active" id="tab-ib">
+        <h4>InfiniBand Characteristics</h4>
+        <ul>
+          <li><strong>Latency:</strong> ~0.6&ndash;1.0 &micro;s end-to-end (measured via <code>ib_write_lat</code>)</li>
+          <li><strong>Lossless by design:</strong> Credit-based flow control at every hop. No configuration needed&mdash;it just works.</li>
+          <li><strong>Subnet Manager:</strong> Central control plane computes all routes. Enables advanced features like adaptive routing, QoS SLs (Service Levels), and virtual lanes (VLs).</li>
+          <li><strong>Fabric management:</strong> UFM provides deep telemetry, health monitoring, and topology awareness. SM detects and reroutes around failed links automatically.</li>
+          <li><strong>In-network computing:</strong> NVIDIA SHARP performs MPI_Allreduce, MPI_Barrier, and other collectives inside the switch network, reducing traffic and latency for AI training.</li>
+          <li><strong>Partitioning:</strong> PKeys enforced in hardware at the HCA for strong multi-tenant isolation.</li>
+          <li><strong>Switches:</strong> Requires purpose-built InfiniBand switches (Quantum-2, etc.). These are not interchangeable with Ethernet switches.</li>
+          <li><strong>Cabling:</strong> Same physical cables (QSFP-DD, fiber, DAC) but different electrical signaling. IB and Ethernet ports are not cross-compatible.</li>
+        </ul>
+      </div>
+
+      <div class="tab-content" id="tab-roce">
+        <h4>RoCE (v2) Characteristics</h4>
+        <ul>
+          <li><strong>Latency:</strong> ~2&ndash;3 &micro;s end-to-end (additional overhead from Ethernet framing, PFC/ECN processing)</li>
+          <li><strong>Lossless via configuration:</strong> Requires PFC + ECN + DCQCN all configured correctly across every switch and NIC. A single misconfigured switch can cause drops and RDMA failures.</li>
+          <li><strong>Routing:</strong> Standard IP/Ethernet routing (BGP, OSPF, ECMP). No special control plane needed, but ECMP hashing must be tuned for RoCE flows.</li>
+          <li><strong>Fabric management:</strong> Uses standard Ethernet NOS (Cumulus, SONiC, EOS). Monitoring via SNMP, gNMI, streaming telemetry. Less IB-specific insight.</li>
+          <li><strong>No in-network computing:</strong> SHARP is InfiniBand-only. RoCE relies entirely on host-side collectives (NCCL tree/ring algorithms).</li>
+          <li><strong>Isolation:</strong> Standard Ethernet VLANs, ACLs, VRFs. Weaker than PKey enforcement but well-understood operationally.</li>
+          <li><strong>Switches:</strong> Standard Ethernet switches (Spectrum-4, Tomahawk, Trident, etc.). Same switches can carry RoCE, TCP, and management traffic.</li>
+          <li><strong>Operational familiarity:</strong> Most network engineers know Ethernet. IB requires specialized skills.</li>
+        </ul>
+      </div>
+
+      <div class="tab-content" id="tab-compare">
+        <h4>Head-to-Head Comparison</h4>
+        <div class="table-wrapper">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>InfiniBand (NDR 400G)</th>
+                <th>RoCE v2 (400GbE)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Latency</strong></td>
+                <td>~0.6&ndash;1.0 &micro;s</td>
+                <td>~2&ndash;3 &micro;s</td>
+              </tr>
+              <tr>
+                <td><strong>Bandwidth</strong></td>
+                <td>400 Gb/s per port</td>
+                <td>400 Gb/s per port</td>
+              </tr>
+              <tr>
+                <td><strong>Lossless mechanism</strong></td>
+                <td>Native credit-based flow control</td>
+                <td>PFC + ECN + DCQCN (complex config)</td>
+              </tr>
+              <tr>
+                <td><strong>Configuration complexity</strong></td>
+                <td>SM handles routing (simpler data plane)</td>
+                <td>PFC/ECN/DCQCN tuning per switch (complex)</td>
+              </tr>
+              <tr>
+                <td><strong>ECMP / multi-path</strong></td>
+                <td>Adaptive routing via SM</td>
+                <td>Standard IP ECMP (hash-based)</td>
+              </tr>
+              <tr>
+                <td><strong>In-network computing</strong></td>
+                <td>SHARP (allreduce in switches)</td>
+                <td>Not available</td>
+              </tr>
+              <tr>
+                <td><strong>Switch cost</strong></td>
+                <td>Higher (IB-only switches)</td>
+                <td>Lower (commodity Ethernet switches)</td>
+              </tr>
+              <tr>
+                <td><strong>Operational expertise</strong></td>
+                <td>Specialized IB skills needed</td>
+                <td>Standard Ethernet skills</td>
+              </tr>
+              <tr>
+                <td><strong>Multi-tenant isolation</strong></td>
+                <td>PKeys (hardware-enforced)</td>
+                <td>VLANs / VRFs (software/switch-enforced)</td>
+              </tr>
+              <tr>
+                <td><strong>Superpod recommendation</strong></td>
+                <td><strong>Preferred for DGX/HGX clusters</strong></td>
+                <td>Viable for smaller-scale or Ethernet-only shops</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout callout-tip">
+          <strong>When to use which:</strong> NVIDIA Superpod reference architectures specify InfiniBand as the primary compute fabric due to its lossless guarantees, lower latency, adaptive routing, and SHARP in-network computing. RoCE is a strong choice when building on existing Ethernet infrastructure, when the cluster is smaller (&lt;256 GPUs), or when Ethernet is mandated by organizational policy. Many large deployments use <em>both</em>: InfiniBand for GPU-to-GPU compute traffic and Ethernet for storage, management, and out-of-band access.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       3. NVIDIA NETWORKING HARDWARE
+       ============================================================ -->
+  <div class="subsection" id="nvidia-networking-hardware">
+    <h2>3. NVIDIA Networking Hardware</h2>
+
+    <!-- ConnectX-7 -->
+    <div class="info-card">
+      <h4>NVIDIA ConnectX-7 Network Adapter</h4>
+      <p>The ConnectX-7 is the current-generation SmartNIC/HCA used in DGX H100 and HGX H100 systems. Each DGX H100 has <strong>eight</strong> ConnectX-7 adapters (one per GPU), plus additional ports for storage and management.</p>
+
+      <div class="table-wrapper">
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>Specification</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Port speed</strong></td>
+              <td>1x 400Gb/s or 2x 200Gb/s (InfiniBand NDR / Ethernet)</td>
+            </tr>
+            <tr>
+              <td><strong>Host interface</strong></td>
+              <td>PCIe Gen5 x16 (64 GT/s, ~63 GB/s bidirectional)</td>
+            </tr>
+            <tr>
+              <td><strong>Protocol support</strong></td>
+              <td>InfiniBand and Ethernet (dual-protocol, configured at boot)</td>
+            </tr>
+            <tr>
+              <td><strong>RDMA</strong></td>
+              <td>Native IB Verbs, RoCEv2, iWARP</td>
+            </tr>
+            <tr>
+              <td><strong>GPUDirect RDMA</strong></td>
+              <td>Yes&mdash;direct NIC-to-GPU memory path via PCIe P2P</td>
+            </tr>
+            <tr>
+              <td><strong>GPUDirect Storage</strong></td>
+              <td>Yes&mdash;NVMe/NVMe-oF direct to GPU memory</td>
+            </tr>
+            <tr>
+              <td><strong>Crypto offload</strong></td>
+              <td>IPsec and TLS inline encryption/decryption at line rate</td>
+            </tr>
+            <tr>
+              <td><strong>RoCE offloads</strong></td>
+              <td>Hardware DCQCN, ECN marking, PFC</td>
+            </tr>
+            <tr>
+              <td><strong>Form factor</strong></td>
+              <td>QSFP-DD (single-port 400G) or OSFP</td>
+            </tr>
+            <tr>
+              <td><strong>Firmware management</strong></td>
+              <td><code>mlxfwmanager</code>, <code>mst</code> (Mellanox Software Tools)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-info">
+        <strong>SRE note:</strong> ConnectX firmware updates are critical for stability. Use <code>mlxfwmanager --online -u</code> to update from NVIDIA's firmware repository. Always update in a maintenance window&mdash;firmware activation requires link reset or reboot. Check current firmware with <code>mlxfwmanager --query</code> or <code>ibstat</code>.
+      </div>
+    </div>
+
+    <!-- Quantum-2 -->
+    <div class="info-card">
+      <h4>NVIDIA Quantum-2 InfiniBand Switch (QM9700)</h4>
+      <p>The Quantum-2 ASIC powers NVIDIA's NDR InfiniBand switches. In a Superpod, these switches form the leaf and spine layers of the compute fabric.</p>
+
+      <div class="table-wrapper">
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>Specification</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Ports</strong></td>
+              <td>64 ports &times; 400 Gb/s NDR (or 128 &times; 200 Gb/s NDR200)</td>
+            </tr>
+            <tr>
+              <td><strong>Aggregate bandwidth</strong></td>
+              <td>51.2 Tb/s</td>
+            </tr>
+            <tr>
+              <td><strong>Latency</strong></td>
+              <td>~90 ns port-to-port (cut-through)</td>
+            </tr>
+            <tr>
+              <td><strong>Adaptive routing</strong></td>
+              <td>Hardware-based adaptive routing with real-time port load monitoring</td>
+            </tr>
+            <tr>
+              <td><strong>SHARP (in-network computing)</strong></td>
+              <td>Supports SHARP v3&mdash;performs allreduce, reduce-scatter, allgather, and barrier operations inside the switch ASIC</td>
+            </tr>
+            <tr>
+              <td><strong>Virtual lanes</strong></td>
+              <td>Up to 32 VLs for QoS traffic separation</td>
+            </tr>
+            <tr>
+              <td><strong>Congestion control</strong></td>
+              <td>Credit-based flow control + congestion control (CC) with dedicated congestion management tables</td>
+            </tr>
+            <tr>
+              <td><strong>Form factors</strong></td>
+              <td>QM9700 (1U fixed), QM9790 (modular chassis)</td>
+            </tr>
+            <tr>
+              <td><strong>Management</strong></td>
+              <td>In-band via SM/MADs, out-of-band via serial/Ethernet management port, UFM integration</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="expandable">
+        <button class="expandable-toggle" aria-expanded="false">
+          <span class="expand-icon">+</span> SHARP In-Network Computing
+        </button>
+        <div class="expandable-content">
+          <p><strong>SHARP (Scalable Hierarchical Aggregation and Reduction Protocol)</strong> offloads collective operations from the hosts into the switch network itself. Instead of data traversing the full tree for an allreduce (up to root, then back down), intermediate switches perform partial reductions as data passes through:</p>
+          <ul>
+            <li><strong>Allreduce:</strong> Each leaf switch aggregates (sums/max/min) data from its connected nodes, sends the partial result up. Spine switches aggregate partials from leaf switches. The final result propagates back down. This reduces network traffic by up to 2x and latency by the depth of the tree.</li>
+            <li><strong>Barrier:</strong> Implemented as a zero-byte allreduce. Completes in O(log N) switch hops instead of O(N) host-to-host messages.</li>
+            <li><strong>Supported data types:</strong> FP16, BF16, FP32, FP64, INT32, INT64</li>
+            <li><strong>NCCL integration:</strong> NCCL 2.12+ supports SHARP via the <code>NCCL_COLLNET_ENABLE=1</code> environment variable. The SHARP plugin (<code>libnccl-net-sharp.so</code>) handles tree construction and in-network reduction.</li>
+          </ul>
+          <p>SHARP is particularly impactful for large-scale LLM training where allreduce of gradient tensors dominates communication time. Benchmarks show 10&ndash;30% training throughput improvement on 256+ GPU jobs.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Spectrum-4 -->
+    <div class="info-card">
+      <h4>NVIDIA Spectrum-4 Ethernet Switch (SN5600)</h4>
+      <p>The Spectrum-4 ASIC powers NVIDIA's top-of-line Ethernet switches, used for RoCE compute fabrics, storage networks, and in-band management.</p>
+
+      <div class="table-wrapper">
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>Specification</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Ports</strong></td>
+              <td>64 &times; 400GbE (or 128 &times; 200GbE, or mixed breakout configs)</td>
+            </tr>
+            <tr>
+              <td><strong>Aggregate bandwidth</strong></td>
+              <td>51.2 Tb/s</td>
+            </tr>
+            <tr>
+              <td><strong>Latency</strong></td>
+              <td>~300 ns port-to-port (cut-through)</td>
+            </tr>
+            <tr>
+              <td><strong>Buffer</strong></td>
+              <td>~132 MB on-chip shared buffer (critical for PFC/lossless operation)</td>
+            </tr>
+            <tr>
+              <td><strong>RoCE support</strong></td>
+              <td>Full PFC, ECN/WRED marking, DCQCN-aware per-priority queuing</td>
+            </tr>
+            <tr>
+              <td><strong>Adaptive routing</strong></td>
+              <td>Hardware adaptive routing across ECMP paths based on real-time port load</td>
+            </tr>
+            <tr>
+              <td><strong>NOS</strong></td>
+              <td>Cumulus Linux or NVIDIA DOCA-based SONiC</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="expandable">
+        <button class="expandable-toggle" aria-expanded="false">
+          <span class="expand-icon">+</span> What is Adaptive Routing on Spectrum-4?
+        </button>
+        <div class="expandable-content">
+          <p><strong>Adaptive routing</strong> on Spectrum-4 dynamically selects the least-congested ECMP next-hop for each packet, rather than using a static hash. Traditional ECMP hashes on the 5-tuple (src IP, dst IP, src port, dst port, protocol) to pick a single path per flow. This can lead to <strong>hash collisions</strong> where multiple large flows land on the same link while others are idle.</p>
+          <p>Spectrum-4's adaptive routing monitors real-time egress queue depths across all ECMP members and steers packets to the least-loaded path. This happens per-packet (or per-flowlet), providing much better load balancing for elephant flows common in RDMA/NCCL traffic patterns.</p>
+          <ul>
+            <li><strong>Per-packet adaptive routing:</strong> Maximum load balancing, but may cause packet reordering. Requires receiver-side reordering support (RoCE NICs handle this in hardware).</li>
+            <li><strong>Flowlet-based adaptive routing:</strong> Only changes path during idle gaps in a flow, avoiding reordering. Good middle ground.</li>
+          </ul>
+          <p>This is configured via Cumulus/SONiC as <code>adaptive-routing</code> on ECMP groups, and is one of the key advantages of Spectrum-4 over commodity Ethernet ASICs for RoCE deployments.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       4. CABLES AND TRANSCEIVERS
+       ============================================================ -->
+  <div class="subsection" id="cables-transceivers">
+    <h2>4. Cables and Transceivers</h2>
+
+    <h3>Cable Types</h3>
+    <div class="table-wrapper">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Cable Type</th>
+            <th>Max Reach</th>
+            <th>Cost</th>
+            <th>Latency</th>
+            <th>Use Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>DAC (Direct Attach Copper)</strong></td>
+            <td>&lt;5 m (typically 1&ndash;3 m)</td>
+            <td>Lowest</td>
+            <td>Lowest (no E/O conversion)</td>
+            <td>Within-rack connections (server to ToR switch). Passive DACs up to ~3m at 400G; active DACs slightly further.</td>
+          </tr>
+          <tr>
+            <td><strong>AOC (Active Optical Cable)</strong></td>
+            <td>5&ndash;30 m (up to 100m for some)</td>
+            <td>Moderate</td>
+            <td>Low (integrated optics)</td>
+            <td>Intra-row and short inter-row connections. Between racks within the same pod. Fixed cable&mdash;cannot swap transceivers.</td>
+          </tr>
+          <tr>
+            <td><strong>Fiber + Transceiver</strong></td>
+            <td>30 m to 10 km+</td>
+            <td>Highest</td>
+            <td>Low (E/O conversion adds ~5 ns)</td>
+            <td>Inter-row, inter-pod, inter-building connections. Most flexible&mdash;swap transceivers or cables independently.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-tip">
+      <strong>SRE cost optimization:</strong> In a Superpod, the vast majority of cables are intra-rack DACs (server to leaf switch) and short AOCs (leaf to spine within the same row). Only spine-to-core or cross-building links need structured fiber with transceivers. DACs can save 5&ndash;10x per link versus transceiver + fiber combinations.
+    </div>
+
+    <!-- Transceiver Form Factors -->
+    <h3>Transceiver Form Factors</h3>
+
+    <!-- SVG Diagram: Connector comparison -->
+    <div class="diagram-container">
+      <h4>Port / Connector Form Factor Comparison</h4>
+      <svg viewBox="0 0 800 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Comparison of transceiver form factors showing relative sizes of SFP28, QSFP28, QSFP56, QSFP-DD, and OSFP">
+        <!-- Background -->
+        <rect width="800" height="340" fill="#0d1117" rx="8"/>
+
+        <!-- SFP28 -->
+        <g transform="translate(40, 60)">
+          <rect x="0" y="50" width="40" height="80" rx="3" fill="#1a2233" stroke="#4fc3f7" stroke-width="1.5"/>
+          <rect x="5" y="55" width="30" height="6" rx="1" fill="#4fc3f7" opacity="0.4"/>
+          <line x1="8" y1="125" x2="32" y2="125" stroke="#4fc3f7" stroke-width="1"/>
+          <text x="20" y="40" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">SFP28</text>
+          <text x="20" y="160" text-anchor="middle" fill="#90caf9" font-size="10">25 Gb/s</text>
+          <text x="20" y="175" text-anchor="middle" fill="#78909c" font-size="9">1 lane</text>
+          <text x="20" y="195" text-anchor="middle" fill="#78909c" font-size="9">13.4mm</text>
+          <text x="20" y="207" text-anchor="middle" fill="#78909c" font-size="9">wide</text>
+        </g>
+
+        <!-- QSFP28 -->
+        <g transform="translate(160, 60)">
+          <rect x="0" y="30" width="72" height="100" rx="4" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
+          <rect x="6" y="36" width="14" height="6" rx="1" fill="#66bb6a" opacity="0.4"/>
+          <rect x="22" y="36" width="14" height="6" rx="1" fill="#66bb6a" opacity="0.4"/>
+          <rect x="38" y="36" width="14" height="6" rx="1" fill="#66bb6a" opacity="0.4"/>
+          <rect x="54" y="36" width="14" height="6" rx="1" fill="#66bb6a" opacity="0.4"/>
+          <line x1="8" y1="125" x2="64" y2="125" stroke="#66bb6a" stroke-width="1"/>
+          <text x="36" y="20" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">QSFP28</text>
+          <text x="36" y="160" text-anchor="middle" fill="#a5d6a7" font-size="10">100 Gb/s</text>
+          <text x="36" y="175" text-anchor="middle" fill="#78909c" font-size="9">4 x 25G lanes</text>
+          <text x="36" y="195" text-anchor="middle" fill="#78909c" font-size="9">18.4mm wide</text>
+        </g>
+
+        <!-- QSFP56 -->
+        <g transform="translate(310, 60)">
+          <rect x="0" y="30" width="72" height="100" rx="4" fill="#1a2233" stroke="#ffa726" stroke-width="1.5"/>
+          <rect x="6" y="36" width="14" height="6" rx="1" fill="#ffa726" opacity="0.4"/>
+          <rect x="22" y="36" width="14" height="6" rx="1" fill="#ffa726" opacity="0.4"/>
+          <rect x="38" y="36" width="14" height="6" rx="1" fill="#ffa726" opacity="0.4"/>
+          <rect x="54" y="36" width="14" height="6" rx="1" fill="#ffa726" opacity="0.4"/>
+          <line x1="8" y1="125" x2="64" y2="125" stroke="#ffa726" stroke-width="1"/>
+          <text x="36" y="20" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">QSFP56</text>
+          <text x="36" y="160" text-anchor="middle" fill="#ffcc80" font-size="10">200 Gb/s</text>
+          <text x="36" y="175" text-anchor="middle" fill="#78909c" font-size="9">4 x 50G lanes</text>
+          <text x="36" y="195" text-anchor="middle" fill="#78909c" font-size="9">18.4mm wide</text>
+          <text x="36" y="210" text-anchor="middle" fill="#78909c" font-size="9">(Same cage</text>
+          <text x="36" y="222" text-anchor="middle" fill="#78909c" font-size="9">as QSFP28)</text>
+        </g>
+
+        <!-- QSFP-DD -->
+        <g transform="translate(470, 60)">
+          <rect x="0" y="15" width="76" height="115" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
+          <!-- Top row 4 lanes -->
+          <rect x="6" y="22" width="14" height="6" rx="1" fill="#ef5350" opacity="0.4"/>
+          <rect x="22" y="22" width="14" height="6" rx="1" fill="#ef5350" opacity="0.4"/>
+          <rect x="38" y="22" width="14" height="6" rx="1" fill="#ef5350" opacity="0.4"/>
+          <rect x="54" y="22" width="14" height="6" rx="1" fill="#ef5350" opacity="0.4"/>
+          <!-- Bottom row 4 lanes -->
+          <rect x="6" y="32" width="14" height="6" rx="1" fill="#ef5350" opacity="0.3"/>
+          <rect x="22" y="32" width="14" height="6" rx="1" fill="#ef5350" opacity="0.3"/>
+          <rect x="38" y="32" width="14" height="6" rx="1" fill="#ef5350" opacity="0.3"/>
+          <rect x="54" y="32" width="14" height="6" rx="1" fill="#ef5350" opacity="0.3"/>
+          <line x1="8" y1="125" x2="68" y2="125" stroke="#ef5350" stroke-width="1"/>
+          <text x="38" y="7" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">QSFP-DD</text>
+          <text x="38" y="160" text-anchor="middle" fill="#ef9a9a" font-size="10">400 Gb/s</text>
+          <text x="38" y="175" text-anchor="middle" fill="#78909c" font-size="9">8 x 50G lanes</text>
+          <text x="38" y="195" text-anchor="middle" fill="#78909c" font-size="9">18.4mm wide</text>
+          <text x="38" y="210" text-anchor="middle" fill="#78909c" font-size="9">(Backward compat.</text>
+          <text x="38" y="222" text-anchor="middle" fill="#78909c" font-size="9">w/ QSFP)</text>
+        </g>
+
+        <!-- OSFP -->
+        <g transform="translate(630, 60)">
+          <rect x="0" y="10" width="90" height="120" rx="4" fill="#1a2233" stroke="#ce93d8" stroke-width="1.5"/>
+          <!-- 8 lanes shown -->
+          <rect x="6" y="18" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.4"/>
+          <rect x="24" y="18" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.4"/>
+          <rect x="42" y="18" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.4"/>
+          <rect x="60" y="18" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.4"/>
+          <rect x="6" y="28" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.3"/>
+          <rect x="24" y="28" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.3"/>
+          <rect x="42" y="28" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.3"/>
+          <rect x="60" y="28" width="16" height="6" rx="1" fill="#ce93d8" opacity="0.3"/>
+          <line x1="8" y1="125" x2="82" y2="125" stroke="#ce93d8" stroke-width="1"/>
+          <text x="45" y="3" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">OSFP</text>
+          <text x="45" y="160" text-anchor="middle" fill="#ce93d8" font-size="10">400&ndash;800 Gb/s</text>
+          <text x="45" y="175" text-anchor="middle" fill="#78909c" font-size="9">8 x 100G lanes</text>
+          <text x="45" y="195" text-anchor="middle" fill="#78909c" font-size="9">22.6mm wide</text>
+          <text x="45" y="210" text-anchor="middle" fill="#78909c" font-size="9">(Better thermals</text>
+          <text x="45" y="222" text-anchor="middle" fill="#78909c" font-size="9">than QSFP-DD)</text>
+        </g>
+
+        <!-- Scale indicator -->
+        <text x="400" y="280" text-anchor="middle" fill="#546e7a" font-size="11" font-style="italic">Relative size comparison (not to exact scale) &mdash; all dimensions are faceplate width</text>
+
+        <!-- Legend line -->
+        <line x1="100" y1="305" x2="700" y2="305" stroke="#263238" stroke-width="1" stroke-dasharray="4,4"/>
+        <text x="400" y="325" text-anchor="middle" fill="#546e7a" font-size="10">QSFP-DD maintains backward compatibility with QSFP28/QSFP56 modules (same cage width, added rear row of contacts)</text>
+      </svg>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Form Factor</th>
+            <th>Lanes</th>
+            <th>Max Speed</th>
+            <th>Common Uses</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>SFP+</strong></td>
+            <td>1</td>
+            <td>10 Gb/s</td>
+            <td>10GbE management interfaces, legacy storage</td>
+          </tr>
+          <tr>
+            <td><strong>SFP28</strong></td>
+            <td>1</td>
+            <td>25 Gb/s</td>
+            <td>25GbE server connectivity, breakout from 100G</td>
+          </tr>
+          <tr>
+            <td><strong>SFP56</strong></td>
+            <td>1</td>
+            <td>50 Gb/s</td>
+            <td>50GbE, breakout from 200G</td>
+          </tr>
+          <tr>
+            <td><strong>QSFP28</strong></td>
+            <td>4</td>
+            <td>100 Gb/s</td>
+            <td>100GbE, EDR InfiniBand (100 Gb/s), breakout to 4x25G</td>
+          </tr>
+          <tr>
+            <td><strong>QSFP56</strong></td>
+            <td>4</td>
+            <td>200 Gb/s</td>
+            <td>HDR InfiniBand (200 Gb/s), 200GbE</td>
+          </tr>
+          <tr>
+            <td><strong>QSFP-DD</strong></td>
+            <td>8</td>
+            <td>400 Gb/s</td>
+            <td>NDR InfiniBand (400 Gb/s), 400GbE. Double-density: 8 lanes in a QSFP-compatible faceplate.</td>
+          </tr>
+          <tr>
+            <td><strong>OSFP</strong></td>
+            <td>8</td>
+            <td>800 Gb/s</td>
+            <td>XDR InfiniBand (800 Gb/s), 800GbE. Wider than QSFP-DD with better thermal envelope for higher power optics.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Fiber Types -->
+    <h3>Fiber Types</h3>
+    <div class="table-wrapper">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Fiber Type</th>
+            <th>Core Size</th>
+            <th>Standard</th>
+            <th>400G Reach</th>
+            <th>Connector</th>
+            <th>Use Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>MMF OM3</strong></td>
+            <td>50 &micro;m</td>
+            <td>IEEE 802.3bs</td>
+            <td>~70 m</td>
+            <td>MPO-16 / MPO-12</td>
+            <td>Within-room, legacy installs</td>
+          </tr>
+          <tr>
+            <td><strong>MMF OM4</strong></td>
+            <td>50 &micro;m</td>
+            <td>IEEE 802.3bs</td>
+            <td>~100 m</td>
+            <td>MPO-16 / MPO-12</td>
+            <td>Standard datacenter intra-building. Most common choice for Superpod.</td>
+          </tr>
+          <tr>
+            <td><strong>MMF OM5</strong></td>
+            <td>50 &micro;m</td>
+            <td>TIA-492AAAE</td>
+            <td>~150 m</td>
+            <td>MPO-16 / MPO-12</td>
+            <td>Extended reach MMF, supports SWDM (Short Wavelength Division Mux)</td>
+          </tr>
+          <tr>
+            <td><strong>SMF OS2</strong></td>
+            <td>9 &micro;m</td>
+            <td>IEEE 802.3cu</td>
+            <td>2&ndash;10+ km</td>
+            <td>LC duplex / CS</td>
+            <td>Inter-building, campus, long-haul. Required for distances &gt;150m at 400G.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="expand-icon">+</span> Connectors: MPO/MTP, LC, and SC
+      </button>
+      <div class="expandable-content">
+        <h4>MPO/MTP (Multi-fiber Push On / Mechanical Transfer Push-on)</h4>
+        <p>Multi-fiber connectors that bundle 8, 12, 16, or 24 fibers into a single ferrule. Used for parallel optics in high-speed links:</p>
+        <ul>
+          <li><strong>MPO-12:</strong> 12 fibers. Used for 40GbE (4 Tx + 4 Rx, 4 unused) and 100GbE SR4.</li>
+          <li><strong>MPO-16:</strong> 16 fibers. Used for 400GbE SR8 (8 Tx + 8 Rx). Becoming the standard for 400G MMF deployments.</li>
+          <li><strong>MPO-24:</strong> 24 fibers. Used for higher-density trunk cables and some 400G variants.</li>
+          <li><strong>Polarity matters:</strong> MPO connectors can be Type A (straight), Type B (reversed), or Type C (pair-flipped). Mismatched polarity causes link failures. Always verify polarity type when connecting structured cabling.</li>
+        </ul>
+
+        <h4>LC (Lucent Connector)</h4>
+        <p>Small form-factor duplex connector (2 fibers: Tx + Rx). The standard for SMF connections and SFP-based transceivers. LC connectors use a 1.25 mm ferrule and snap-in latch. At 400G, LC is used with DR4 and FR4 transceivers that use WDM (4 wavelengths over 2 fibers).</p>
+
+        <h4>CS (Compact SN) Connector</h4>
+        <p>A newer, smaller duplex connector designed for higher faceplate density. Used in some 400G and 800G transceiver designs where LC is too large. Same fiber alignment as LC but ~40% smaller footprint.</p>
+      </div>
+    </div>
+
+    <!-- Breakout Cables -->
+    <h3>Breakout Cables</h3>
+    <div class="info-card">
+      <p>Breakout cables (also called fan-out or splitter cables) split a single high-speed port into multiple lower-speed ports. They physically separate the individual lane groups in the multi-lane transceiver into separate connectors:</p>
+      <ul>
+        <li><strong>1&times;400G &rarr; 4&times;100G:</strong> Splits a QSFP-DD (8 lanes) into 4&times; QSFP28 (2 lanes each). Common for connecting 400G spine switches to 100G leaf switches or servers.</li>
+        <li><strong>1&times;400G &rarr; 2&times;200G:</strong> Splits a QSFP-DD into 2&times; QSFP56 (4 lanes each). Used for HDR InfiniBand connectivity from NDR switches.</li>
+        <li><strong>1&times;200G &rarr; 2&times;100G:</strong> Splits a QSFP56 (HDR) into 2&times; QSFP28 (HDR100). Common in mixed-generation IB fabrics.</li>
+        <li><strong>1&times;100G &rarr; 4&times;25G:</strong> Splits a QSFP28 into 4&times; SFP28. Classic breakout for connecting to 25GbE server NICs.</li>
+      </ul>
+      <p>The switch port must support breakout mode in its configuration. Example on Cumulus Linux: <code>nv set interface swp1 breakout 4x100G</code>.</p>
+    </div>
+
+    <!-- Cable color coding -->
+    <h3>Cable Color Coding Conventions</h3>
+    <div class="table-wrapper">
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Jacket Color</th>
+            <th>Convention</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color:#ff9800"><strong>Orange</strong></td>
+            <td>Multi-mode fiber (OM1, OM2)</td>
+          </tr>
+          <tr>
+            <td style="color:#00bcd4"><strong>Aqua</strong></td>
+            <td>OM3 / OM4 multi-mode fiber (laser-optimized 50&micro;m). Most common in modern datacenters.</td>
+          </tr>
+          <tr>
+            <td style="color:#8bc34a"><strong>Lime Green</strong></td>
+            <td>OM5 multi-mode fiber (wideband, supports SWDM)</td>
+          </tr>
+          <tr>
+            <td style="color:#ffeb3b"><strong>Yellow</strong></td>
+            <td>Single-mode fiber (OS2). Long-reach.</td>
+          </tr>
+          <tr>
+            <td><strong>Black</strong></td>
+            <td>DAC (direct attach copper) or AOC (active optical cable). Also generic outdoor fiber.</td>
+          </tr>
+          <tr>
+            <td style="color:#9c27b0"><strong>Violet</strong></td>
+            <td>Sometimes used for OM4+ or proprietary coding. Check vendor documentation.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout callout-info">
+      <strong>Note:</strong> These are industry conventions, not standards. Vendors may deviate. Always verify fiber type by checking the cable label or using an optical power meter / fiber identifier. In structured cabling plants, document fiber types in your DCIM (Data Center Infrastructure Management) system.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       5. GPUDirect TECHNOLOGIES
+       ============================================================ -->
+  <div class="subsection" id="gpudirect-technologies">
+    <h2>5. GPUDirect Technologies</h2>
+
+    <div class="callout callout-concept">
+      <strong>The fundamental problem:</strong> In traditional data transfer, data from the network must be copied into host (CPU) memory, then copied again to GPU memory. For AI training workloads that transfer terabytes of gradient data per minute across thousands of GPUs, this double-copy through CPU memory creates a bottleneck that wastes PCIe bandwidth and adds latency. GPUDirect eliminates these copies.
+    </div>
+
+    <!-- GPUDirect RDMA SVG -->
+    <div class="diagram-container">
+      <h4>GPUDirect RDMA: Data Flow Comparison</h4>
+      <svg viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram comparing traditional data path through CPU memory versus GPUDirect RDMA path directly between NIC and GPU memory">
+        <rect width="800" height="520" fill="#0d1117" rx="8"/>
+
+        <!-- Title: Traditional Path -->
+        <text x="200" y="35" text-anchor="middle" fill="#ef5350" font-size="14" font-weight="bold">Traditional Path (without GPUDirect)</text>
+
+        <!-- Traditional Path - Remote Node -->
+        <rect x="30" y="55" width="120" height="50" rx="6" fill="#1a2233" stroke="#78909c" stroke-width="1.5"/>
+        <text x="90" y="78" text-anchor="middle" fill="#b0bec5" font-size="11">Remote GPU</text>
+        <text x="90" y="93" text-anchor="middle" fill="#78909c" font-size="9">Memory</text>
+
+        <!-- Arrow 1: Remote to Network -->
+        <line x1="150" y1="80" x2="175" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+
+        <!-- Network cloud -->
+        <ellipse cx="215" cy="80" rx="35" ry="20" fill="none" stroke="#78909c" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="215" y="84" text-anchor="middle" fill="#78909c" font-size="9">Network</text>
+
+        <!-- Arrow 2: Network to NIC -->
+        <line x1="250" y1="80" x2="275" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+
+        <!-- NIC -->
+        <rect x="275" y="60" width="70" height="40" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
+        <text x="310" y="84" text-anchor="middle" fill="#ef9a9a" font-size="10">NIC (HCA)</text>
+
+        <!-- Arrow 3: NIC to CPU Memory (copy 1) -->
+        <path d="M310,100 L310,140" stroke="#ef5350" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
+        <text x="330" y="125" fill="#ef5350" font-size="9" font-weight="bold">Copy 1</text>
+
+        <!-- CPU Memory -->
+        <rect x="265" y="140" width="90" height="45" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
+        <text x="310" y="160" text-anchor="middle" fill="#ef9a9a" font-size="10">CPU (Host)</text>
+        <text x="310" y="175" text-anchor="middle" fill="#ef9a9a" font-size="10">Memory</text>
+
+        <!-- Arrow 4: CPU Memory to GPU Memory (copy 2) -->
+        <path d="M310,185 L310,225" stroke="#ef5350" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
+        <text x="330" y="210" fill="#ef5350" font-size="9" font-weight="bold">Copy 2</text>
+
+        <!-- GPU Memory -->
+        <rect x="265" y="225" width="90" height="45" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
+        <text x="310" y="245" text-anchor="middle" fill="#ef9a9a" font-size="10">GPU (HBM)</text>
+        <text x="310" y="260" text-anchor="middle" fill="#ef9a9a" font-size="10">Memory</text>
+
+        <!-- CPU involvement label -->
+        <rect x="60" y="148" width="180" height="30" rx="4" fill="#2a1520" stroke="#ef5350" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="150" y="167" text-anchor="middle" fill="#ef5350" font-size="10">CPU involved in data path</text>
+
+        <!-- ============ Divider ============ -->
+        <line x1="400" y1="50" x2="400" y2="280" stroke="#37474f" stroke-width="1" stroke-dasharray="6,4"/>
+
+        <!-- Title: GPUDirect RDMA -->
+        <text x="600" y="35" text-anchor="middle" fill="#66bb6a" font-size="14" font-weight="bold">GPUDirect RDMA Path</text>
+
+        <!-- GPUDirect - Remote Node -->
+        <rect x="430" y="55" width="120" height="50" rx="6" fill="#1a2233" stroke="#78909c" stroke-width="1.5"/>
+        <text x="490" y="78" text-anchor="middle" fill="#b0bec5" font-size="11">Remote GPU</text>
+        <text x="490" y="93" text-anchor="middle" fill="#78909c" font-size="9">Memory</text>
+
+        <!-- Arrow 1: Remote to Network -->
+        <line x1="550" y1="80" x2="575" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+
+        <!-- Network cloud -->
+        <ellipse cx="615" cy="80" rx="35" ry="20" fill="none" stroke="#78909c" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="615" y="84" text-anchor="middle" fill="#78909c" font-size="9">Network</text>
+
+        <!-- Arrow 2: Network to NIC -->
+        <line x1="650" y1="80" x2="675" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+
+        <!-- NIC -->
+        <rect x="675" y="60" width="70" height="40" rx="4" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
+        <text x="710" y="84" text-anchor="middle" fill="#a5d6a7" font-size="10">NIC (HCA)</text>
+
+        <!-- GPUDirect direct path: NIC directly to GPU Memory -->
+        <path d="M710,100 L710,225" stroke="#66bb6a" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
+        <text x="735" y="165" fill="#66bb6a" font-size="10" font-weight="bold">Direct</text>
+        <text x="735" y="180" fill="#66bb6a" font-size="10" font-weight="bold">PCIe P2P</text>
+
+        <!-- CPU Memory (bypassed) -->
+        <rect x="500" y="140" width="90" height="45" rx="4" fill="#0d1117" stroke="#37474f" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="545" y="160" text-anchor="middle" fill="#37474f" font-size="10">CPU (Host)</text>
+        <text x="545" y="175" text-anchor="middle" fill="#37474f" font-size="10">Memory</text>
+        <!-- X mark on CPU box -->
+        <line x1="508" y1="148" x2="582" y2="177" stroke="#37474f" stroke-width="1.5"/>
+        <line x1="582" y1="148" x2="508" y2="177" stroke="#37474f" stroke-width="1.5"/>
+
+        <!-- GPU Memory -->
+        <rect x="665" y="225" width="90" height="45" rx="4" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
+        <text x="710" y="245" text-anchor="middle" fill="#a5d6a7" font-size="10">GPU (HBM)</text>
+        <text x="710" y="260" text-anchor="middle" fill="#a5d6a7" font-size="10">Memory</text>
+
+        <!-- CPU bypassed label -->
+        <rect x="460" y="198" width="180" height="30" rx="4" fill="#0d2210" stroke="#66bb6a" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="550" y="217" text-anchor="middle" fill="#66bb6a" font-size="10">CPU completely bypassed</text>
+
+        <!-- ============ Bottom: All GPUDirect variants ============ -->
+        <line x1="20" y1="300" x2="780" y2="300" stroke="#37474f" stroke-width="1"/>
+        <text x="400" y="325" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">GPUDirect Technology Family</text>
+
+        <!-- GPUDirect RDMA box -->
+        <rect x="30" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#4fc3f7" stroke-width="1.5"/>
+        <text x="110" y="370" text-anchor="middle" fill="#4fc3f7" font-size="12" font-weight="bold">GPUDirect RDMA</text>
+        <text x="110" y="390" text-anchor="middle" fill="#90caf9" font-size="9">NIC &harr; GPU Memory</text>
+        <text x="110" y="405" text-anchor="middle" fill="#78909c" font-size="9">Bypasses CPU for</text>
+        <text x="110" y="418" text-anchor="middle" fill="#78909c" font-size="9">network transfers</text>
+
+        <!-- GPUDirect Storage box -->
+        <rect x="220" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#ffa726" stroke-width="1.5"/>
+        <text x="300" y="370" text-anchor="middle" fill="#ffa726" font-size="12" font-weight="bold">GPUDirect Storage</text>
+        <text x="300" y="390" text-anchor="middle" fill="#ffcc80" font-size="9">NVMe &harr; GPU Memory</text>
+        <text x="300" y="405" text-anchor="middle" fill="#78909c" font-size="9">Direct path from storage</text>
+        <text x="300" y="418" text-anchor="middle" fill="#78909c" font-size="9">to GPU (via cuFile API)</text>
+
+        <!-- GPUDirect P2P box -->
+        <rect x="410" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
+        <text x="490" y="370" text-anchor="middle" fill="#66bb6a" font-size="12" font-weight="bold">GPUDirect P2P</text>
+        <text x="490" y="390" text-anchor="middle" fill="#a5d6a7" font-size="9">GPU &harr; GPU (same node)</text>
+        <text x="490" y="405" text-anchor="middle" fill="#78909c" font-size="9">PCIe or NVLink between</text>
+        <text x="490" y="418" text-anchor="middle" fill="#78909c" font-size="9">GPUs, no CPU staging</text>
+
+        <!-- GPUDirect Async box -->
+        <rect x="600" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#ce93d8" stroke-width="1.5"/>
+        <text x="680" y="370" text-anchor="middle" fill="#ce93d8" font-size="12" font-weight="bold">GPUDirect Async</text>
+        <text x="680" y="390" text-anchor="middle" fill="#e1bee7" font-size="9">GPU-initiated transfers</text>
+        <text x="680" y="405" text-anchor="middle" fill="#78909c" font-size="9">GPU kernel triggers</text>
+        <text x="680" y="418" text-anchor="middle" fill="#78909c" font-size="9">network ops directly</text>
+
+        <!-- Performance note -->
+        <text x="400" y="475" text-anchor="middle" fill="#90a4ae" font-size="11" font-style="italic">GPUDirect RDMA + NVLink enable the full-bisection bandwidth required for efficient multi-node LLM training</text>
+        <text x="400" y="495" text-anchor="middle" fill="#78909c" font-size="10">Combined, these technologies eliminate all CPU-mediated copies from the GPU communication path</text>
+
+        <!-- Arrow marker definitions -->
+        <defs>
+          <marker id="arrow-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#78909c"/>
+          </marker>
+          <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#ef5350"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#66bb6a"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <!-- GPUDirect RDMA -->
+    <div class="info-card">
+      <h4>GPUDirect RDMA</h4>
+      <p>GPUDirect RDMA enables the network adapter (ConnectX HCA) to directly read from and write to GPU memory (HBM) via PCIe peer-to-peer transactions, completely bypassing CPU host memory. This eliminates two memory copies per transfer and removes the CPU from the critical data path.</p>
+      <h5>How it works:</h5>
+      <ol>
+        <li>GPU memory is registered as an RDMA Memory Region, and the NIC is given the physical addresses (BAR mapping) of GPU HBM.</li>
+        <li>When a remote RDMA Write targets a GPU buffer, the NIC DMAs the incoming data directly to GPU HBM via PCIe P2P.</li>
+        <li>The CPU is not involved in the data transfer at all&mdash;it only sets up the operation (posts the WR, manages QP state).</li>
+      </ol>
+      <h5>Requirements:</h5>
+      <ul>
+        <li><strong>NVIDIA GPU driver</strong> with <code>nvidia-peermem</code> kernel module loaded (replaces the older <code>nv_peer_mem</code> module)</li>
+        <li><strong>PCIe topology:</strong> NIC and GPU must be on the same PCIe root complex (or use PCIe ACS override). In DGX H100, each ConnectX-7 is affinity-mapped to a specific GPU via the PCIe switch topology.</li>
+        <li><strong>NCCL integration:</strong> NCCL automatically uses GPUDirect RDMA when available. Verify with <code>NCCL_DEBUG=INFO</code>&mdash;look for <code>NET/IB : Using GPUDirect RDMA</code> in logs.</li>
+      </ul>
+      <h5>Performance impact:</h5>
+      <p>Without GPUDirect RDMA, inter-node GPU communication is limited by the CPU memory bandwidth (~200 GB/s on a Xeon) and requires two PCIe traversals (NIC&rarr;CPU, CPU&rarr;GPU). With GPUDirect RDMA, the path is NIC&rarr;GPU directly, achieving full PCIe Gen5 x16 line rate (~63 GB/s per direction, per NIC-GPU pair). On a DGX H100 with 8 NICs, this provides up to ~400 GB/s aggregate network injection bandwidth.</p>
+    </div>
+
+    <!-- GPUDirect Storage -->
+    <div class="info-card">
+      <h4>GPUDirect Storage (GDS)</h4>
+      <p>GPUDirect Storage extends the direct-path concept to storage I/O. Instead of reading data from NVMe into CPU memory and then copying to GPU, GDS enables a direct DMA path from the NVMe controller (or NVMe-over-Fabrics target) to GPU HBM.</p>
+      <ul>
+        <li><strong>API:</strong> <code>cuFile</code> API (part of CUDA toolkit). Applications call <code>cuFileRead()</code>/<code>cuFileWrite()</code> instead of standard POSIX I/O.</li>
+        <li><strong>Supported filesystems:</strong> ext4 (with O_DIRECT), XFS, Lustre, GPFS/Spectrum Scale, WekaFS, VAST Data</li>
+        <li><strong>NVMe-oF:</strong> GDS works over NVMe over Fabrics (RDMA or TCP), enabling remote storage arrays to DMA directly to GPU memory.</li>
+        <li><strong>Use case:</strong> Training data loading (checkpointing, dataset reading), especially for large models where loading terabytes of checkpoint data through CPU memory becomes a bottleneck.</li>
+      </ul>
+      <p>GDS reduces checkpoint load time by 2&ndash;5x depending on storage backend and data sizes. It also frees CPU memory bandwidth for other tasks (preprocessing, CPU-side computation).</p>
+    </div>
+
+    <!-- GPUDirect P2P -->
+    <div class="info-card">
+      <h4>GPUDirect Peer-to-Peer (P2P)</h4>
+      <p>GPUDirect P2P enables direct memory access between GPUs within the same node, without staging through CPU memory. The interconnect can be:</p>
+      <ul>
+        <li><strong>NVLink:</strong> In DGX H100, all 8 GPUs are connected via NVLink 4.0 (4th generation NVSwitch), providing 900 GB/s bidirectional bandwidth per GPU. This is the primary intra-node communication path and is roughly 7x faster than PCIe Gen5.</li>
+        <li><strong>PCIe:</strong> If NVLink is not available (or for GPUs not directly connected via NVLink), P2P falls back to PCIe peer-to-peer. This is slower but still avoids the CPU memory copy.</li>
+      </ul>
+      <p>NCCL automatically uses NVLink for intra-node collectives and GPUDirect RDMA for inter-node. The combination provides the hierarchical communication pattern needed for efficient data-parallel and tensor-parallel training.</p>
+    </div>
+
+    <div class="callout callout-tip">
+      <strong>Why this matters for SREs:</strong> When debugging NCCL performance issues, the first things to check are: (1) Is <code>nvidia-peermem</code> loaded? (<code>lsmod | grep nvidia_peermem</code>). (2) Are NICs affinity-mapped to the correct GPUs? (check <code>nvidia-smi topo -m</code>). (3) Is GPUDirect actually being used? (set <code>NCCL_DEBUG=INFO</code> and look for GDR/P2P messages). A single misconfigured NIC-GPU affinity can reduce training throughput by 20&ndash;40% due to cross-NUMA PCIe traffic.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       QUIZ SECTION
+       ============================================================ -->
+  <div class="subsection quiz-section" id="networking-physical-quiz">
+    <h2>Knowledge Check</h2>
+    <p>Test your understanding of physical networking concepts for GPU Superpod infrastructure.</p>
+
+    <!-- Quiz 1 -->
+    <div class="quiz-question" data-quiz-id="net-phys-q1">
+      <h4>Question 1: InfiniBand Lossless Behavior</h4>
+      <p>InfiniBand achieves lossless behavior by design. What is the fundamental mechanism that prevents packet drops on a healthy IB fabric, and how does this differ from how RoCE achieves lossless behavior on Ethernet?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q1" value="a"/>
+          <span>Both InfiniBand and RoCE use Priority Flow Control (PFC) pause frames to prevent buffer overflow. The only difference is that IB implements PFC in the HCA firmware while RoCE implements it in the switch OS.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q1" value="b"/>
+          <span>InfiniBand uses credit-based flow control where a sender can only transmit when the receiver has advertised available buffer space (credits). This is built into the link layer and requires no configuration. RoCE uses PFC (pause frames) + ECN + DCQCN, which are separate Ethernet extensions that must be explicitly configured on every switch and NIC, and a single misconfiguration can cause drops.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q1" value="c"/>
+          <span>InfiniBand uses a central Subnet Manager to rate-limit all senders to prevent congestion. RoCE uses distributed TCP-like congestion control. The SM approach is simpler but does not scale beyond 1,000 nodes.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q1" value="d"/>
+          <span>InfiniBand uses larger switch buffers (1 GB vs. 128 MB on Ethernet switches), which makes drops practically impossible. RoCE relies on ECN marking to slow senders before buffers fill.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" style="display:none;">
+        <p><strong>Correct answer: B.</strong> InfiniBand's credit-based flow control is a link-layer mechanism where the receiver explicitly grants credits (buffer space) to the sender. A sender will never transmit without credits, so buffer overflow is physically impossible on a healthy link. This requires zero configuration&mdash;it is inherent to the protocol. RoCE, running over Ethernet, must retrofit lossless behavior using PFC (per-priority pause frames), ECN (congestion marking), and DCQCN (end-to-end rate control). All three must be configured correctly and consistently across every switch in the path. This is one of the primary operational advantages of InfiniBand over RoCE for RDMA workloads.</p>
+      </div>
+    </div>
+
+    <!-- Quiz 2 -->
+    <div class="quiz-question" data-quiz-id="net-phys-q2">
+      <h4>Question 2: Transceiver Form Factors and Breakout</h4>
+      <p>You have a Quantum-2 (QM9700) InfiniBand switch with 64 ports of QSFP-DD (400Gb/s NDR). You need to connect to a legacy system that has ConnectX-6 adapters with QSFP56 ports (HDR, 200Gb/s). What is the correct approach?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q2" value="a"/>
+          <span>Use a QSFP-DD to QSFP56 media converter that translates the electrical signaling between NDR and HDR. Each converter costs about $200 and adds approximately 50ns of latency.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q2" value="b"/>
+          <span>Use a 1x400G to 2x200G breakout cable. The QSFP-DD end plugs into the QM9700 switch port, and the two QSFP56 ends each provide an HDR (200Gb/s) connection. The switch port must be configured in 2x200G breakout mode. One 400G switch port provides two HDR connections.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q2" value="c"/>
+          <span>This is not possible. NDR and HDR use incompatible signaling and you must replace either the switch or the HCAs. InfiniBand does not support mixed-generation connections.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q2" value="d"/>
+          <span>Simply plug a QSFP56 cable directly into the QSFP-DD port. QSFP-DD is backward compatible and will automatically negotiate down to HDR speed, but you waste half the port bandwidth.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" style="display:none;">
+        <p><strong>Correct answer: B.</strong> NDR (400Gb/s) ports support 2x200G breakout mode, splitting the 8 lanes (100Gb/s each) into two groups of 4 lanes (200Gb/s each, matching HDR speed). A breakout cable with a QSFP-DD connector on the switch end and two QSFP56 connectors on the host end is the standard solution. This is a common scenario when upgrading spine switches to NDR while leaf or host connections remain at HDR. Option D is partially true&mdash;QSFP-DD cages do accept QSFP56 modules&mdash;but the port must still be reconfigured, and you get only one 200G connection instead of potentially two from the breakout approach.</p>
+      </div>
+    </div>
+
+    <!-- Quiz 3 -->
+    <div class="quiz-question" data-quiz-id="net-phys-q3">
+      <h4>Question 3: GPUDirect RDMA Troubleshooting</h4>
+      <p>A user reports that their multi-node NCCL training job is running 35% slower than expected. You run <code>NCCL_DEBUG=INFO</code> and notice the logs say <code>NET/IB : Using [Send/Recv] (no GPUDirect)</code> instead of <code>NET/IB : Using GPUDirect RDMA</code>. What are the most likely causes, and what would you check first?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q3" value="a"/>
+          <span>The InfiniBand fabric is congested, causing NCCL to automatically fall back from GPUDirect to CPU-staged transfers for reliability. Check switch buffer utilization via UFM and add more spine switches to reduce congestion.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q3" value="b"/>
+          <span>The <code>nvidia-peermem</code> kernel module is not loaded, preventing the NIC from registering GPU memory as RDMA-accessible. Check with <code>lsmod | grep nvidia_peermem</code>. Also verify NIC-to-GPU PCIe affinity with <code>nvidia-smi topo -m</code>&mdash;if the NIC and its assigned GPU are on different NUMA domains or PCIe root complexes, GPUDirect may be disabled or degraded. Finally, check that PCIe ACS (Access Control Services) is disabled or properly configured, as ACS can block P2P PCIe transactions.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q3" value="c"/>
+          <span>GPUDirect RDMA requires InfiniBand and the user is running on a RoCE network. GPUDirect does not work with Ethernet-based RDMA, so the fallback to CPU-staged transfers is expected.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="net-phys-q3" value="d"/>
+          <span>The NCCL version is too old. GPUDirect RDMA requires NCCL 3.0 or later. Upgrade NCCL and the issue will resolve.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" style="display:none;">
+        <p><strong>Correct answer: B.</strong> The most common cause of GPUDirect RDMA not being used is the <code>nvidia-peermem</code> module not being loaded. This module (which replaced the older out-of-tree <code>nv_peer_mem</code> module starting with CUDA 11.4 / driver 470+) registers a callback with the RDMA core subsystem so that <code>ibv_reg_mr()</code> can handle GPU virtual addresses. Without it, the NIC cannot access GPU memory and NCCL falls back to staging through host memory. The second most common cause is PCIe topology issues&mdash;if ACS (Access Control Services) is enabled in the BIOS or on PCIe bridges between the NIC and GPU, P2P DMA transactions are blocked. Check with <code>lspci -vvv | grep ACSCtl</code>. Option C is incorrect: GPUDirect RDMA works with both InfiniBand and RoCEv2. Option A is incorrect: NCCL does not fall back from GPUDirect due to congestion&mdash;it is a capability check at initialization time.</p>
+      </div>
+    </div>
+  </div>
+
+</section>

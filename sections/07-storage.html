@@ -1,0 +1,1605 @@
+<section id="storage" class="content-section" data-layer="5">
+
+  <div class="section-header">
+    <h2>Storage Architecture for GPU Clusters</h2>
+    <p class="section-subtitle">From NVMe flash to parallel file systems &mdash; feeding data to thousands of GPUs without starving the pipeline</p>
+  </div>
+
+  <!-- ============================================================
+       PART 1: STORAGE REQUIREMENTS
+       ============================================================ -->
+  <div class="subsection" id="storage-requirements">
+    <h3>1. Storage Requirements for GPU Clusters</h3>
+
+    <div class="info-card">
+      <h4>The Fundamental Problem</h4>
+      <p>A single NVIDIA H100 GPU can consume data at roughly <strong>3.35 TB/s</strong> of HBM3 memory bandwidth. A DGX H100 node with 8 GPUs provides 26.8 TB/s of aggregate memory bandwidth. When thousands of GPUs train in parallel, the storage subsystem must pre-stage, stream, and checkpoint data at rates that dwarf traditional enterprise workloads. If storage cannot keep up, GPUs sit idle &mdash; wasting thousands of dollars per hour in compute capacity.</p>
+    </div>
+
+    <h4>Key Data Categories</h4>
+
+    <div class="info-card">
+      <h4>Training Data</h4>
+      <p>Large language model training corpora routinely reach <strong>petabyte scale</strong>. The Common Crawl dataset alone is ~400 TB compressed. Multimodal models combining text, images, audio, and video push datasets even larger. This data must be accessible to every GPU node with high throughput and low latency. Typical access patterns are sequential reads with large block sizes (1&ndash;16 MB), though data augmentation and random sampling can introduce random read patterns that stress IOPS capacity.</p>
+    </div>
+
+    <div class="info-card">
+      <h4>Checkpoint Storage</h4>
+      <p>During training, model checkpoints are saved every N steps (commonly every 500&ndash;2,000 steps) as a fault-tolerance mechanism. A single checkpoint for a 70B-parameter model using mixed precision (FP16/BF16 weights + FP32 optimizer states) can consume <strong>500 GB&ndash;1.5 TB</strong> per save. For a 175B-parameter model, checkpoints can exceed <strong>3 TB</strong>. With distributed training, each rank may write its own shard simultaneously, creating massive burst write patterns. A 4,096-GPU training run writing checkpoints every 30 minutes can generate 50+ TB of checkpoint data per day.</p>
+    </div>
+
+    <h4>Key Performance Metrics</h4>
+
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>Definition</th>
+          <th>Typical HPC Requirement</th>
+          <th>Why It Matters</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Throughput (GB/s)</strong></td>
+          <td>Sustained sequential read/write bandwidth</td>
+          <td>100&ndash;2,000+ GB/s aggregate</td>
+          <td>Data loading for training; checkpoint writes</td>
+        </tr>
+        <tr>
+          <td><strong>IOPS</strong></td>
+          <td>I/O Operations Per Second (random 4K&ndash;64K)</td>
+          <td>Millions of IOPS aggregate</td>
+          <td>Metadata operations; random access patterns; small-file datasets (e.g., ImageNet)</td>
+        </tr>
+        <tr>
+          <td><strong>Latency</strong></td>
+          <td>Time from I/O request to first byte</td>
+          <td>&lt;200 &mu;s (flash), &lt;1 ms (parallel FS)</td>
+          <td>Interactive workflows; data pipeline stalls</td>
+        </tr>
+        <tr>
+          <td><strong>Metadata Rate</strong></td>
+          <td>File creates/stats/opens per second</td>
+          <td>100K&ndash;1M+ ops/s</td>
+          <td>Datasets with millions of small files (images, audio clips)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h4>Storage Tiers</h4>
+
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>Tier</th>
+          <th>Media</th>
+          <th>Latency</th>
+          <th>Throughput (per device)</th>
+          <th>Cost (approx. $/TB)</th>
+          <th>Use Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Hot</strong></td>
+          <td>NVMe SSD (PCIe Gen5)</td>
+          <td>&lt;100 &mu;s</td>
+          <td>12&ndash;14 GB/s</td>
+          <td>$80&ndash;150</td>
+          <td>Active training data, checkpoints, scratch</td>
+        </tr>
+        <tr>
+          <td><strong>Warm</strong></td>
+          <td>SATA/SAS SSD</td>
+          <td>100&ndash;500 &mu;s</td>
+          <td>0.5&ndash;3 GB/s</td>
+          <td>$40&ndash;80</td>
+          <td>Recent checkpoints, preprocessed datasets</td>
+        </tr>
+        <tr>
+          <td><strong>Cold</strong></td>
+          <td>HDD (nearline SAS)</td>
+          <td>5&ndash;15 ms</td>
+          <td>200&ndash;300 MB/s</td>
+          <td>$10&ndash;25</td>
+          <td>Archived datasets, old checkpoints</td>
+        </tr>
+        <tr>
+          <td><strong>Archive</strong></td>
+          <td>Tape (LTO-9)</td>
+          <td>Seconds&ndash;minutes</td>
+          <td>400 MB/s (streaming)</td>
+          <td>$2&ndash;5</td>
+          <td>Long-term retention, compliance</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-warning">
+      <h4>The GPU Starvation Problem</h4>
+      <p>Consider an 8-node DGX H100 cluster (64 GPUs). If each GPU processes micro-batches at 200 GB/s effective data consumption (after caching), the cluster needs <strong>12.8 TB/s</strong> of data delivery. Even with aggressive caching in GPU HBM and host DRAM, the storage backend must sustain hundreds of GB/s to avoid pipeline stalls. This is why parallel file systems and NVMe-oF fabrics are non-negotiable for large-scale training.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       PART 2: NAS
+       ============================================================ -->
+  <div class="subsection" id="nas-storage">
+    <h3>2. NAS (Network Attached Storage)</h3>
+
+    <p>NAS provides <strong>file-level</strong> storage over standard networking protocols. Clients mount remote filesystems and interact with files using familiar POSIX semantics (open, read, write, close). NAS is the simplest shared storage model but has inherent scalability limitations for HPC workloads.</p>
+
+    <h4>NFS (Network File System)</h4>
+
+    <div class="info-card">
+      <h4>NFS Protocol Versions</h4>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>NFSv3</th>
+            <th>NFSv4.0</th>
+            <th>NFSv4.1 (pNFS)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Transport</td>
+            <td>UDP or TCP</td>
+            <td>TCP only</td>
+            <td>TCP only</td>
+          </tr>
+          <tr>
+            <td>Statefulness</td>
+            <td>Stateless</td>
+            <td>Stateful (leases)</td>
+            <td>Stateful (sessions)</td>
+          </tr>
+          <tr>
+            <td>Security</td>
+            <td>AUTH_SYS (UID/GID)</td>
+            <td>Kerberos (RPCSEC_GSS)</td>
+            <td>Kerberos (RPCSEC_GSS)</td>
+          </tr>
+          <tr>
+            <td>Parallel I/O</td>
+            <td>No &mdash; single server</td>
+            <td>No &mdash; single server</td>
+            <td><strong>Yes</strong> &mdash; pNFS layouts</td>
+          </tr>
+          <tr>
+            <td>Firewall Friendly</td>
+            <td>No (multiple ports)</td>
+            <td>Yes (port 2049)</td>
+            <td>Yes (port 2049)</td>
+          </tr>
+          <tr>
+            <td>Delegations</td>
+            <td>No</td>
+            <td>Yes (client-side caching)</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td>Trunking</td>
+            <td>No</td>
+            <td>No</td>
+            <td>Yes (session trunking)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">NFSv4.1 pNFS Deep Dive</button>
+      <div class="expandable-content">
+        <p><strong>pNFS (Parallel NFS)</strong> separates the metadata path from the data path. The MDS (Metadata Server) provides <em>layout</em> information that tells the client exactly which data servers hold which byte ranges of a file. The client then reads/writes directly to the data servers in parallel, bypassing the MDS for I/O.</p>
+        <p><strong>Layout types:</strong></p>
+        <ul>
+          <li><strong>Files layout:</strong> Data is striped across multiple NFS data servers. Each stripe unit maps to a specific server. Conceptually similar to RAID-0 across NFS servers.</li>
+          <li><strong>Blocks layout:</strong> Client gets block-level addresses on shared block devices (SAN). Requires SAN connectivity from all clients.</li>
+          <li><strong>Objects layout:</strong> Data stored as objects on OSD (Object Storage Device) targets. Least commonly deployed.</li>
+          <li><strong>FlexFiles layout (RFC 8435):</strong> Extension of files layout with mirroring support for resiliency. Used by NetApp ONTAP.</li>
+        </ul>
+        <p>Example Linux mount with pNFS:</p>
+<pre><code class="language-bash"># Mount with pNFS enabled (default in v4.1)
+mount -t nfs4 -o vers=4.1,proto=tcp nfs-server:/export /mnt/data
+
+# Verify pNFS is active
+cat /proc/self/mountstats | grep -A5 "nfs4.1"
+
+# Check layout statistics
+cat /proc/fs/nfsfs/pnfs_layoutstats</code></pre>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <h4>When to Use NAS in GPU Clusters</h4>
+      <ul>
+        <li><strong>Shared home directories:</strong> User home dirs, scripts, Jupyter notebooks, config files</li>
+        <li><strong>Small shared datasets:</strong> Datasets under 1 TB with low concurrency</li>
+        <li><strong>Model code repositories:</strong> Source code, experiment configs, environment definitions</li>
+        <li><strong>NOT for:</strong> High-throughput training data delivery, checkpoint I/O, or scratch space</li>
+      </ul>
+    </div>
+
+    <h4>SMB/CIFS</h4>
+    <p>SMB (Server Message Block) is primarily used in Windows environments. In HPC/GPU clusters running Linux, SMB is rarely the primary storage protocol. It may appear for:</p>
+    <ul>
+      <li>Windows-based data preparation or visualization workstations accessing shared data</li>
+      <li>Integration with enterprise Active Directory environments</li>
+      <li>Samba servers providing cross-platform file access</li>
+    </ul>
+    <p>SMB3 supports multichannel I/O, encryption, and direct RDMA (SMB Direct), but Linux NFS or parallel filesystems are almost always preferred for GPU cluster storage.</p>
+  </div>
+
+  <!-- ============================================================
+       PART 3: SAN
+       ============================================================ -->
+  <div class="subsection" id="san-storage">
+    <h3>3. SAN (Storage Area Network)</h3>
+
+    <p>A SAN provides <strong>block-level</strong> storage over a dedicated network. To the operating system, SAN LUNs (Logical Unit Numbers) appear as locally attached disks. Unlike NAS (which presents files), SAN presents raw blocks that must be formatted with a filesystem by the host.</p>
+
+    <h4>Fibre Channel (FC)</h4>
+
+    <div class="info-card">
+      <h4>FC Protocol Stack</h4>
+      <p>Fibre Channel is a lossless, high-speed network protocol purpose-built for storage traffic. It operates over its own physical layer (optical fiber or copper twinax) with dedicated FC switches.</p>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>FC Generation</th>
+            <th>Line Rate</th>
+            <th>Effective Throughput</th>
+            <th>Year Introduced</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>16GFC</td><td>14.025 Gb/s</td><td>~1,600 MB/s</td><td>2011</td></tr>
+          <tr><td>32GFC</td><td>28.05 Gb/s</td><td>~3,200 MB/s</td><td>2016</td></tr>
+          <tr><td>64GFC</td><td>57.2 Gb/s</td><td>~6,400 MB/s</td><td>2020</td></tr>
+          <tr><td>128GFC</td><td>113.2 Gb/s</td><td>~12,800 MB/s</td><td>2024</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Key FC concepts:</strong></p>
+      <ul>
+        <li><strong>WWN (World Wide Name):</strong> Unique 64-bit identifier for FC ports (analogous to MAC addresses)</li>
+        <li><strong>Zoning:</strong> Logical segmentation of the FC fabric. Only devices in the same zone can communicate. Enforced at the switch level for security and stability.</li>
+        <li><strong>LUN Masking:</strong> Storage-side access control determining which hosts can see which LUNs</li>
+        <li><strong>Fabric Login (FLOGI):</strong> Process by which a node registers with the FC switch fabric</li>
+        <li><strong>FCID:</strong> 24-bit address assigned to each port during FLOGI, used for frame routing</li>
+      </ul>
+    </div>
+
+    <h4>iSCSI (Internet Small Computer Systems Interface)</h4>
+
+    <div class="info-card">
+      <h4>iSCSI Overview</h4>
+      <p>iSCSI encapsulates SCSI commands inside TCP/IP packets, allowing block storage access over standard Ethernet infrastructure. This eliminates the need for dedicated FC HBAs (Host Bus Adapters) and FC switches.</p>
+<pre><code class="language-bash"># Discover iSCSI targets
+iscsiadm -m discovery -t sendtargets -p 10.0.50.10:3260
+
+# Login to a target
+iscsiadm -m node -T iqn.2024-01.com.storage:lun0 -p 10.0.50.10 --login
+
+# List active sessions
+iscsiadm -m session -P3
+
+# Multipath configuration (dm-multipath)
+multipath -ll</code></pre>
+    </div>
+
+    <h4>FC vs iSCSI Comparison</h4>
+
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>Attribute</th>
+          <th>Fibre Channel</th>
+          <th>iSCSI</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Protocol Layer</td><td>Native FC over dedicated fabric</td><td>SCSI over TCP/IP over Ethernet</td></tr>
+        <tr><td>Typical Latency</td><td>50&ndash;200 &mu;s</td><td>200&ndash;1,000 &mu;s</td></tr>
+        <tr><td>Infrastructure</td><td>FC HBAs, FC switches, optical cables</td><td>Standard NICs, Ethernet switches</td></tr>
+        <tr><td>Cost</td><td>High (dedicated hardware)</td><td>Lower (shared Ethernet)</td></tr>
+        <tr><td>Reliability</td><td>Lossless fabric (credit-based flow control)</td><td>TCP retransmissions (lossy possible)</td></tr>
+        <tr><td>Typical Use</td><td>Enterprise mission-critical, databases, VMware</td><td>Budget-conscious deployments, remote sites</td></tr>
+        <tr><td>HPC Relevance</td><td>Moderate (being replaced by NVMe-oF)</td><td>Low (too much latency for HPC)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-info">
+      <h4>SAN in GPU Clusters</h4>
+      <p>Traditional SAN is uncommon in modern GPU HPC clusters. Block storage is increasingly accessed via <strong>NVMe-oF</strong> (NVMe over Fabrics) rather than FC or iSCSI. However, SANs may still appear as backend storage for parallel filesystem servers (e.g., Lustre OSS nodes connected to a shared FC SAN array for the OST backing store).</p>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       PART 4: PARALLEL FILE SYSTEMS
+       ============================================================ -->
+  <div class="subsection" id="parallel-filesystems">
+    <h3>4. Parallel File Systems</h3>
+
+    <div class="callout callout-warning">
+      <h4>The Critical Storage Layer for HPC/AI</h4>
+      <p>Parallel file systems are the <strong>single most important storage technology</strong> for GPU supercomputer clusters. They stripe data across many servers, delivering aggregate throughput that scales linearly with the number of storage servers. Every major GPU Superpod deployment uses a parallel file system as the primary shared storage layer.</p>
+    </div>
+
+    <!-- LUSTRE -->
+    <h4 id="lustre">Lustre</h4>
+
+    <div class="info-card">
+      <h4>Lustre Architecture</h4>
+      <p>Lustre is an open-source parallel distributed file system originally developed by Cluster File Systems Inc. and now maintained by the OpenSFS community and DDN (DataDirect Networks). It is the dominant file system for HPC, used by the majority of the Top500 supercomputers, including Frontier (the first exascale system).</p>
+
+      <p><strong>Core components:</strong></p>
+      <ul>
+        <li><strong>MDS (Metadata Server):</strong> Handles all metadata operations &mdash; file names, directory structure, permissions, file layouts, striping information. Runs the MDT (Metadata Target) which stores the actual metadata on persistent storage (typically NVMe SSDs for performance).</li>
+        <li><strong>MDT (Metadata Target):</strong> The storage backend for metadata. Each MDS serves one or more MDTs. Lustre 2.14+ supports DNE (Distributed Namespace) with multiple MDTs for metadata scalability. Remote directories can be striped across MDTs.</li>
+        <li><strong>OSS (Object Storage Server):</strong> Handles all data I/O. Each OSS manages one or more OSTs. When a client reads or writes file data, it communicates directly with the appropriate OSS(es) in parallel.</li>
+        <li><strong>OST (Object Storage Target):</strong> The actual storage devices backing file data. Typically a RAID array, JBOD, or NVMe pool formatted with ldiskfs (ext4-based) or ZFS. Each file is composed of one or more objects, each stored on a different OST.</li>
+        <li><strong>MGS (Management Server):</strong> Stores configuration logs for the filesystem. Often co-located with the primary MDS. Clients contact the MGS first to obtain the filesystem configuration, then communicate with MDS and OSS directly.</li>
+        <li><strong>Client:</strong> A kernel module (lustre.ko) implementing a POSIX filesystem. Clients mount Lustre and see a single unified namespace. The client handles striping &mdash; for a 4-stripe file, the client opens connections to 4 OSS servers simultaneously for parallel I/O.</li>
+      </ul>
+    </div>
+
+    <!-- LUSTRE ARCHITECTURE SVG -->
+    <div class="diagram-container">
+      <h4>Lustre Parallel File System Architecture</h4>
+      <svg viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lustre architecture showing MDS, OSS servers, and clients with file striping">
+        <defs>
+          <marker id="arrow-stor" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#76b900"/></marker>
+          <marker id="arrow-meta" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#e63946"/></marker>
+          <marker id="arrow-data" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4dabf7"/></marker>
+          <linearGradient id="mds-grad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#e63946"/><stop offset="100%" stop-color="#c1121f"/></linearGradient>
+          <linearGradient id="oss-grad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#4dabf7"/><stop offset="100%" stop-color="#1971c2"/></linearGradient>
+          <linearGradient id="client-grad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#76b900"/><stop offset="100%" stop-color="#5a8f00"/></linearGradient>
+          <linearGradient id="mgs-grad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#f59f00"/><stop offset="100%" stop-color="#e67700"/></linearGradient>
+        </defs>
+
+        <!-- Title -->
+        <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="bold" fill="#e0e0e0">Lustre File System Architecture &amp; File Striping</text>
+
+        <!-- MGS -->
+        <rect x="380" y="45" width="140" height="50" rx="8" fill="url(#mgs-grad)" stroke="#f59f00" stroke-width="1.5"/>
+        <text x="450" y="67" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">MGS</text>
+        <text x="450" y="82" text-anchor="middle" font-size="9" fill="#fff">Config Logs</text>
+
+        <!-- MDS/MDT boxes -->
+        <rect x="70" y="130" width="160" height="70" rx="8" fill="url(#mds-grad)" stroke="#e63946" stroke-width="1.5"/>
+        <text x="150" y="155" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">MDS (Primary)</text>
+        <text x="150" y="172" text-anchor="middle" font-size="10" fill="#ffe0e0">MDT-0: Metadata</text>
+        <text x="150" y="188" text-anchor="middle" font-size="9" fill="#ffe0e0">inodes, dirs, layouts, xattrs</text>
+
+        <rect x="260" y="130" width="160" height="70" rx="8" fill="url(#mds-grad)" stroke="#e63946" stroke-width="1.5" opacity="0.75"/>
+        <text x="340" y="155" text-anchor="middle" font-size="12" font-weight="bold" fill="#fff">MDS (DNE)</text>
+        <text x="340" y="172" text-anchor="middle" font-size="10" fill="#ffe0e0">MDT-1: Remote Dir</text>
+        <text x="340" y="188" text-anchor="middle" font-size="9" fill="#ffe0e0">Distributed Namespace</text>
+
+        <!-- LNET Cloud -->
+        <rect x="50" y="225" width="800" height="45" rx="20" fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="6,3"/>
+        <text x="450" y="252" text-anchor="middle" font-size="12" font-weight="bold" fill="#aaa">LNET (Lustre Networking) &mdash; InfiniBand / TCP</text>
+
+        <!-- OSS boxes -->
+        <rect x="50" y="295" width="150" height="80" rx="8" fill="url(#oss-grad)" stroke="#4dabf7" stroke-width="1.5"/>
+        <text x="125" y="320" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">OSS-0</text>
+        <text x="125" y="338" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-0</text>
+        <text x="125" y="353" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-1</text>
+        <text x="125" y="368" text-anchor="middle" font-size="9" fill="#a0c8e8">ldiskfs / ZFS</text>
+
+        <rect x="230" y="295" width="150" height="80" rx="8" fill="url(#oss-grad)" stroke="#4dabf7" stroke-width="1.5"/>
+        <text x="305" y="320" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">OSS-1</text>
+        <text x="305" y="338" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-2</text>
+        <text x="305" y="353" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-3</text>
+        <text x="305" y="368" text-anchor="middle" font-size="9" fill="#a0c8e8">ldiskfs / ZFS</text>
+
+        <rect x="410" y="295" width="150" height="80" rx="8" fill="url(#oss-grad)" stroke="#4dabf7" stroke-width="1.5"/>
+        <text x="485" y="320" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">OSS-2</text>
+        <text x="485" y="338" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-4</text>
+        <text x="485" y="353" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-5</text>
+        <text x="485" y="368" text-anchor="middle" font-size="9" fill="#a0c8e8">ldiskfs / ZFS</text>
+
+        <rect x="590" y="295" width="150" height="80" rx="8" fill="url(#oss-grad)" stroke="#4dabf7" stroke-width="1.5"/>
+        <text x="665" y="320" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">OSS-3</text>
+        <text x="665" y="338" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-6</text>
+        <text x="665" y="353" text-anchor="middle" font-size="10" fill="#d0e8ff">OST-7</text>
+        <text x="665" y="368" text-anchor="middle" font-size="9" fill="#a0c8e8">ldiskfs / ZFS</text>
+
+        <!-- Compute Clients -->
+        <rect x="100" y="430" width="130" height="55" rx="8" fill="url(#client-grad)" stroke="#76b900" stroke-width="1.5"/>
+        <text x="165" y="455" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">GPU Node 0</text>
+        <text x="165" y="472" text-anchor="middle" font-size="9" fill="#e0f0c0">Lustre Client</text>
+
+        <rect x="280" y="430" width="130" height="55" rx="8" fill="url(#client-grad)" stroke="#76b900" stroke-width="1.5"/>
+        <text x="345" y="455" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">GPU Node 1</text>
+        <text x="345" y="472" text-anchor="middle" font-size="9" fill="#e0f0c0">Lustre Client</text>
+
+        <rect x="460" y="430" width="130" height="55" rx="8" fill="url(#client-grad)" stroke="#76b900" stroke-width="1.5"/>
+        <text x="525" y="455" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">GPU Node 2</text>
+        <text x="525" y="472" text-anchor="middle" font-size="9" fill="#e0f0c0">Lustre Client</text>
+
+        <rect x="640" y="430" width="130" height="55" rx="8" fill="url(#client-grad)" stroke="#76b900" stroke-width="1.5"/>
+        <text x="705" y="455" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">GPU Node 3</text>
+        <text x="705" y="472" text-anchor="middle" font-size="9" fill="#e0f0c0">Lustre Client</text>
+
+        <!-- Connection lines: MGS to MDS -->
+        <line x1="420" y1="95" x2="200" y2="130" stroke="#f59f00" stroke-width="1" stroke-dasharray="4,3"/>
+        <line x1="460" y1="95" x2="360" y2="130" stroke="#f59f00" stroke-width="1" stroke-dasharray="4,3"/>
+
+        <!-- Connection lines: MDS to LNET -->
+        <line x1="150" y1="200" x2="150" y2="225" stroke="#e63946" stroke-width="1.5" marker-end="url(#arrow-meta)"/>
+        <line x1="340" y1="200" x2="340" y2="225" stroke="#e63946" stroke-width="1.5" marker-end="url(#arrow-meta)"/>
+
+        <!-- Connection lines: LNET to OSS -->
+        <line x1="125" y1="270" x2="125" y2="295" stroke="#4dabf7" stroke-width="1.5" marker-end="url(#arrow-data)"/>
+        <line x1="305" y1="270" x2="305" y2="295" stroke="#4dabf7" stroke-width="1.5" marker-end="url(#arrow-data)"/>
+        <line x1="485" y1="270" x2="485" y2="295" stroke="#4dabf7" stroke-width="1.5" marker-end="url(#arrow-data)"/>
+        <line x1="665" y1="270" x2="665" y2="295" stroke="#4dabf7" stroke-width="1.5" marker-end="url(#arrow-data)"/>
+
+        <!-- Connection lines: Clients to LNET (via OSS area) -->
+        <line x1="165" y1="430" x2="165" y2="395" stroke="#76b900" stroke-width="1.2"/>
+        <line x1="345" y1="430" x2="345" y2="395" stroke="#76b900" stroke-width="1.2"/>
+        <line x1="525" y1="430" x2="525" y2="395" stroke="#76b900" stroke-width="1.2"/>
+        <line x1="705" y1="430" x2="705" y2="395" stroke="#76b900" stroke-width="1.2"/>
+
+        <!-- Striping illustration -->
+        <rect x="50" y="510" width="800" height="100" rx="8" fill="rgba(255,255,255,0.04)" stroke="#555" stroke-width="1"/>
+        <text x="450" y="530" text-anchor="middle" font-size="12" font-weight="bold" fill="#e0e0e0">File Striping Example: 128 MB file, stripe_count=4, stripe_size=1MB</text>
+
+        <!-- Stripe blocks -->
+        <rect x="80" y="545" width="70" height="22" rx="3" fill="#4dabf7" opacity="0.9"/><text x="115" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 0</text>
+        <rect x="155" y="545" width="70" height="22" rx="3" fill="#f7a64d" opacity="0.9"/><text x="190" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 1</text>
+        <rect x="230" y="545" width="70" height="22" rx="3" fill="#76b900" opacity="0.9"/><text x="265" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 2</text>
+        <rect x="305" y="545" width="70" height="22" rx="3" fill="#e63946" opacity="0.9"/><text x="340" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 3</text>
+        <rect x="380" y="545" width="70" height="22" rx="3" fill="#4dabf7" opacity="0.9"/><text x="415" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 4</text>
+        <rect x="455" y="545" width="70" height="22" rx="3" fill="#f7a64d" opacity="0.9"/><text x="490" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 5</text>
+        <rect x="530" y="545" width="70" height="22" rx="3" fill="#76b900" opacity="0.9"/><text x="565" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 6</text>
+        <rect x="605" y="545" width="70" height="22" rx="3" fill="#e63946" opacity="0.9"/><text x="640" y="560" text-anchor="middle" font-size="8" fill="#fff">Chunk 7</text>
+        <text x="700" y="560" font-size="9" fill="#aaa">... round-robin</text>
+
+        <!-- Legend for stripe targets -->
+        <rect x="120" y="580" width="12" height="12" rx="2" fill="#4dabf7"/><text x="138" y="591" font-size="9" fill="#ccc">OST-0</text>
+        <rect x="220" y="580" width="12" height="12" rx="2" fill="#f7a64d"/><text x="238" y="591" font-size="9" fill="#ccc">OST-1</text>
+        <rect x="320" y="580" width="12" height="12" rx="2" fill="#76b900"/><text x="338" y="591" font-size="9" fill="#ccc">OST-2</text>
+        <rect x="420" y="580" width="12" height="12" rx="2" fill="#e63946"/><text x="438" y="591" font-size="9" fill="#ccc">OST-3</text>
+        <text x="550" y="591" font-size="9" fill="#aaa">4 OSTs = 4x parallel throughput</text>
+      </svg>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">Lustre Striping &amp; lfs Commands</button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Set striping for a directory: 4 stripes, 1MB stripe size
+lfs setstripe -c 4 -S 1M /mnt/lustre/training_data/
+
+# Set maximum striping (across ALL OSTs) for checkpoint dir
+lfs setstripe -c -1 -S 4M /mnt/lustre/checkpoints/
+
+# Check striping on a file
+lfs getstripe /mnt/lustre/training_data/shard_001.bin
+# Output:
+#   lmm_stripe_count:  4
+#   lmm_stripe_size:   1048576
+#   lmm_pattern:       raid0
+#   lmm_layout_gen:    0
+#   lmm_stripe_offset: -1
+#     obdidx   objid   objid   group
+#          0    12847   0x3230f  0
+#          3    12691   0x318b3  0
+#          1    12753   0x31d91  0
+#          2    12802   0x31f02  0
+
+# Check filesystem usage per OST
+lfs df -h /mnt/lustre
+# UUID                 bytes    Used  Available  Use%  Mounted on
+# lustre-MDT0000_UUID   1.8T  256.3G      1.5T   14%  /mnt/lustre[MDT:0]
+# lustre-OST0000_UUID  50.0T   32.1T     17.9T   64%  /mnt/lustre[OST:0]
+# lustre-OST0001_UUID  50.0T   31.8T     18.2T   64%  /mnt/lustre[OST:1]
+# ...
+
+# Find files owned by a specific user, larger than 10GB
+lfs find /mnt/lustre --user trainuser --size +10G --type f
+
+# Set quota
+lfs setquota -u trainuser -b 100T -B 120T -i 10000000 -I 12000000 /mnt/lustre
+
+# Progressive File Layout (PFL) - different stripe for different file regions
+lfs setstripe -E 1G -c 1 -S 1M -E 64G -c 4 -S 4M -E -1 -c -1 -S 4M /mnt/lustre/pfl_dir/
+# First 1GB: 1 stripe (small files stay on one OST)
+# 1GB-64GB:  4 stripes
+# 64GB+:     all OSTs (maximum throughput)</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">LNET (Lustre Networking) Configuration</button>
+      <div class="expandable-content">
+        <p>LNET is the networking abstraction layer in Lustre. It supports multiple transports simultaneously and provides routing between different network types.</p>
+<pre><code class="language-bash"># Show LNET configuration
+lnetctl net show
+
+# Example LNET config (/etc/lnet.conf):
+# net:
+#   - net type: o2ib       # InfiniBand (OpenFabrics)
+#     local NI(s):
+#       - nid: 10.0.0.1@o2ib
+#         interfaces:
+#           0: ib0
+#   - net type: tcp        # TCP fallback
+#     local NI(s):
+#       - nid: 192.168.1.1@tcp
+#         interfaces:
+#           0: eth0
+
+# Configure LNET with InfiniBand
+lnetctl lnet configure
+lnetctl net add --net o2ib --if ib0
+
+# Check LNET status and peer connectivity
+lnetctl net show
+lnetctl peer show
+lctl ping 10.0.0.2@o2ib    # Ping a Lustre peer
+
+# LNET routing (for multi-rail or cross-network)
+lnetctl route add --net o2ib1 --gateway 10.0.0.254@o2ib --hop 1</code></pre>
+      </div>
+    </div>
+
+    <!-- GPFS -->
+    <h4 id="gpfs">GPFS / IBM Storage Scale (Spectrum Scale)</h4>
+
+    <div class="info-card">
+      <h4>IBM Storage Scale Architecture</h4>
+      <p>IBM Storage Scale (formerly GPFS &mdash; General Parallel File System) is a commercial parallel file system developed by IBM. Unlike Lustre's separate metadata and object servers, GPFS uses a <strong>shared-disk architecture</strong> where all nodes can potentially access all disks (typically via SAN). A token-based distributed locking manager coordinates access.</p>
+
+      <p><strong>Key architectural features:</strong></p>
+      <ul>
+        <li><strong>Shared-disk:</strong> Any node can read/write any disk block. No dedicated storage servers &mdash; all nodes participate in I/O.</li>
+        <li><strong>Declustered RAID:</strong> Data protection is handled internally with RAID-like mechanisms spread across many disks, enabling faster rebuild times than traditional RAID.</li>
+        <li><strong>Distributed Token Manager:</strong> Uses byte-range locking tokens to coordinate concurrent access. Tokens are granted and revoked dynamically.</li>
+        <li><strong>Information Lifecycle Management (ILM):</strong> Policy engine for automatic data tiering based on age, access patterns, or file attributes. Data can migrate between NVMe, SSD, HDD, and tape tiers transparently.</li>
+        <li><strong>Active File Management (AFM):</strong> Asynchronous replication and caching across geographically distributed clusters.</li>
+        <li><strong>Data Encryption &amp; Compression:</strong> At-rest encryption (AES-256) and inline LZ4/zlib compression.</li>
+      </ul>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">GPFS/Storage Scale Commands (mmfs)</button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Create a GPFS filesystem
+mmcrfs /dev/gpfs_data -F /tmp/disk_descriptors.txt -A yes -B 16M \
+  -T /gpfs/data --metadata-block-size 256K -r 2 -R 3
+
+# Mount the filesystem
+mmmount /gpfs/data -a
+
+# Check filesystem status
+mmlsfs /gpfs/data
+mmdf /gpfs/data         # Disk usage
+mmhealth cluster show   # Cluster health
+
+# Add disks to existing filesystem
+mmadddisk /gpfs/data -F /tmp/new_disks.txt
+
+# Create a fileset (logical partition)
+mmcrfileset /gpfs/data training_run_42 --inode-space new
+mmlinkfileset /gpfs/data training_run_42 -J /gpfs/data/runs/42
+
+# Set quota
+mmsetquota /gpfs/data:training_run_42 --block 50T:60T --files 10M:12M
+
+# Policy-based tiering
+mmapplypolicy /gpfs/data -P /etc/mmfs/tiering.policy
+# Example policy file:
+# RULE 'tier_cold' MIGRATE FROM POOL 'ssd' TO POOL 'hdd'
+#   WHERE ACCESS_AGE > 30 DAYS
+#   AND FILE_SIZE > 1GB
+
+# Performance tuning
+mmchconfig pagepool=32G -i    # Increase page cache
+mmchconfig prefetchAggressiveness=2 -i
+mmchconfig maxMBpS=20000 -i   # Max throughput per node</code></pre>
+      </div>
+    </div>
+
+    <!-- WEKAFS -->
+    <h4 id="wekafs">WekaFS (Weka.io)</h4>
+
+    <div class="info-card">
+      <h4>WekaFS Overview</h4>
+      <p>WekaFS is a modern, software-defined parallel file system built from the ground up for flash storage and GPU/AI workloads. It has rapidly gained adoption in GPU cloud infrastructure, notably at CoreWeave, Lambda Labs, and other AI-focused providers. Weka holds multiple IO-500 records for performance.</p>
+
+      <p><strong>Key technical characteristics:</strong></p>
+      <ul>
+        <li><strong>Architecture:</strong> Fully distributed &mdash; no separate metadata or data servers. Every Weka node handles both metadata and data. Uses a shared-nothing design with consistent hashing for data placement.</li>
+        <li><strong>Protocol:</strong> Full POSIX compliance with a custom kernel-bypass client (DPDK-based). The client communicates directly with Weka backends, bypassing the Linux kernel network stack for minimal latency.</li>
+        <li><strong>Performance:</strong> Latency as low as <strong>~100&ndash;200 &mu;s</strong> for small I/O. Throughput scales linearly &mdash; a 100-node Weka cluster can deliver over <strong>2 TB/s</strong> of read throughput.</li>
+        <li><strong>Data Protection:</strong> Distributed parity protection (similar to erasure coding, e.g., 16+2 or 6+2). No RAID controllers needed. Cluster-wide stripe with configurable protection levels.</li>
+        <li><strong>Tiering:</strong> Native tiering from NVMe (hot) to S3-compatible object storage (warm/cold). Data is automatically moved based on access patterns. The S3 tier can be any S3 endpoint: AWS S3, MinIO, Ceph RGW, etc.</li>
+        <li><strong>Snap-to-Object:</strong> Snapshots are created locally and can be asynchronously backed up to S3, enabling backup and disaster recovery without impacting primary performance.</li>
+        <li><strong>Scale:</strong> Single namespace scales to <strong>exabytes</strong> of capacity and <strong>trillions</strong> of files.</li>
+        <li><strong>GPU Integration:</strong> Supports NVIDIA GPUDirect Storage (GDS) for direct DMA transfers from NVMe storage to GPU memory, bypassing the CPU entirely.</li>
+      </ul>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">WekaFS Deployment &amp; Management</button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Install Weka agent on a backend node
+curl -fsSL https://get.weka.io | sh
+
+# Create a cluster (from management node)
+weka cluster create backend-{01..20} --host-ips 10.0.10.1-10.0.10.20
+
+# Add NVMe drives to the cluster
+weka cluster drive add --host backend-01 /dev/nvme0n1 /dev/nvme1n1
+
+# Create a filesystem with tiering to S3
+weka fs create training_data --ssd-capacity 500TiB \
+  --total-capacity 5PiB \
+  --obs-name s3-backup \
+  --data-drives 16 --parity-drives 2
+
+# Mount on compute nodes (POSIX client)
+mount -t wekafs backend-01/training_data /mnt/weka
+
+# Mount with DPDK for kernel-bypass (lowest latency)
+mount -t wekafs -o net=udp backend-01/training_data /mnt/weka
+# Or with DPDK:
+mount -t wekafs -o net=dpdk,num_cores=2 backend-01/training_data /mnt/weka
+
+# Check cluster status
+weka status
+# Output:
+#  WekaIO v4.3.2 (CLI build 4.3.2.1)
+#  Cluster: gpu-storage (UUID: a1b2c3d4-...)
+#  Status:  OK (20 backends, 100% healthy)
+#  Capacity: 500 TiB SSD, 4.5 PiB Object Store
+#  Throughput: ~1.8 TB/s (current), 2.1 TB/s (peak)
+#  IOPS: 12.3M (current)
+
+# Create a snapshot
+weka fs snapshot create training_data snap-epoch-5000
+
+# Tier old snapshots to S3
+weka fs snapshot upload training_data snap-epoch-1000 --obs s3-backup
+
+# GPUDirect Storage configuration
+weka gds enable --filesystem training_data</code></pre>
+      </div>
+    </div>
+
+    <!-- BEEGFS -->
+    <h4 id="beegfs">BeeGFS</h4>
+
+    <div class="info-card">
+      <h4>BeeGFS Architecture</h4>
+      <p>BeeGFS (originally FhGFS) is an open-source parallel file system developed by ThinkParQ (Fraunhofer Institute). It emphasizes simplicity of deployment and ease of management while delivering high parallel performance.</p>
+
+      <p><strong>Components:</strong></p>
+      <ul>
+        <li><strong>Management Service (beegfs-mgmtd):</strong> Registry for all other services. Clients and servers contact it to discover the cluster topology. Lightweight, typically runs on a single node.</li>
+        <li><strong>Metadata Service (beegfs-meta):</strong> Stores directory structure, file attributes, and stripe information. Can be distributed across multiple nodes for scalability. Metadata is stored on fast SSDs/NVMe for performance.</li>
+        <li><strong>Storage Service (beegfs-storage):</strong> Stores actual file data in chunks. Files are striped across multiple storage targets (similar to Lustre OSTs). Each target is a local filesystem (XFS, ext4) on the storage node.</li>
+        <li><strong>Client (beegfs-client):</strong> Kernel module providing POSIX access. Supports RDMA (InfiniBand, RoCE) and TCP transports.</li>
+        <li><strong>BeeGFS-on-Demand (BeeOND):</strong> Ephemeral parallel filesystem using the local NVMe SSDs in compute nodes. Created for a job, destroyed when the job completes. Excellent for burst buffer / scratch space.</li>
+      </ul>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">BeeGFS Setup &amp; Configuration</button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Install BeeGFS (on all nodes)
+wget -q https://www.beegfs.io/release/beegfs_7.4/dists/beegfs-rhel9.repo \
+  -O /etc/yum.repos.d/beegfs.repo
+yum install -y beegfs-mgmtd beegfs-meta beegfs-storage beegfs-client beegfs-utils
+
+# Initialize management service
+/opt/beegfs/sbin/beegfs-setup-mgmtd -p /data/beegfs/mgmt
+
+# Initialize metadata service (pointing to management node)
+/opt/beegfs/sbin/beegfs-setup-meta -p /data/beegfs/meta -s 1 -m mgmt-node
+
+# Initialize storage service
+/opt/beegfs/sbin/beegfs-setup-storage -p /data/beegfs/storage -s 1 -i 101 -m mgmt-node
+
+# Configure client
+/opt/beegfs/sbin/beegfs-setup-client -m mgmt-node
+echo "connUseRDMA = true" >> /etc/beegfs/beegfs-client.conf
+
+# Mount
+mount -t beegfs beegfs_nodev /mnt/beegfs
+
+# Set stripe pattern (4 targets, 2MB chunks)
+beegfs-ctl --setpattern --chunksize=2M --numtargets=4 /mnt/beegfs/training/
+
+# Show stripe info
+beegfs-ctl --getentryinfo /mnt/beegfs/training/data.bin
+
+# BeeOND (Burst Buffer) - create ephemeral FS from local NVMe
+beeond start -n /tmp/nodefile -d /tmp/beeond -c /mnt/beeond
+
+# Check storage targets
+beegfs-ctl --listtargets --nodetype=storage --state</code></pre>
+      </div>
+    </div>
+
+    <!-- COMPARISON TABLE -->
+    <h4>Parallel File System Comparison</h4>
+
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th>Lustre</th>
+          <th>WekaFS</th>
+          <th>GPFS / Storage Scale</th>
+          <th>BeeGFS</th>
+          <th>CephFS</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Architecture</strong></td>
+          <td>Separate MDS + OSS</td>
+          <td>Shared-nothing, all nodes serve data &amp; metadata</td>
+          <td>Shared-disk, token-based locking</td>
+          <td>Separate meta + storage services</td>
+          <td>Separate MDS + OSD (RADOS backend)</td>
+        </tr>
+        <tr>
+          <td><strong>POSIX Compliance</strong></td>
+          <td>Full (with caveats on strict locking)</td>
+          <td>Full</td>
+          <td>Full</td>
+          <td>Full</td>
+          <td>Full</td>
+        </tr>
+        <tr>
+          <td><strong>Max Throughput</strong></td>
+          <td>1+ TB/s (large deployments)</td>
+          <td>2+ TB/s (demonstrated)</td>
+          <td>1+ TB/s</td>
+          <td>500+ GB/s</td>
+          <td>500+ GB/s</td>
+        </tr>
+        <tr>
+          <td><strong>Small File Performance</strong></td>
+          <td>Moderate (DNE helps)</td>
+          <td>Excellent</td>
+          <td>Good</td>
+          <td>Good</td>
+          <td>Good (multi-MDS)</td>
+        </tr>
+        <tr>
+          <td><strong>Latency (small I/O)</strong></td>
+          <td>~500 &mu;s&ndash;1 ms</td>
+          <td>~100&ndash;200 &mu;s</td>
+          <td>~300&ndash;500 &mu;s</td>
+          <td>~300&ndash;700 &mu;s</td>
+          <td>~500 &mu;s&ndash;2 ms</td>
+        </tr>
+        <tr>
+          <td><strong>License</strong></td>
+          <td>Open source (GPL)</td>
+          <td>Commercial</td>
+          <td>Commercial</td>
+          <td>Open source (LGPL) + Enterprise</td>
+          <td>Open source (LGPL)</td>
+        </tr>
+        <tr>
+          <td><strong>Cloud Tiering</strong></td>
+          <td>Limited (manual HSM)</td>
+          <td>Native S3 tiering</td>
+          <td>Policy-based (Transparent Cloud Tiering)</td>
+          <td>Limited</td>
+          <td>Native (RGW)</td>
+        </tr>
+        <tr>
+          <td><strong>Ease of Deployment</strong></td>
+          <td>Moderate (many components)</td>
+          <td>Easy (software-defined)</td>
+          <td>Complex (IBM consulting)</td>
+          <td>Easy</td>
+          <td>Moderate</td>
+        </tr>
+        <tr>
+          <td><strong>GPUDirect Storage</strong></td>
+          <td>Yes (with patches)</td>
+          <td>Yes (native support)</td>
+          <td>Yes</td>
+          <td>Limited</td>
+          <td>No (community work in progress)</td>
+        </tr>
+        <tr>
+          <td><strong>Typical Users</strong></td>
+          <td>DOE labs, Top500 sites, ORNL, LLNL</td>
+          <td>CoreWeave, Lambda, AI cloud providers</td>
+          <td>IBM customers, TACC, NASA</td>
+          <td>Universities, mid-size HPC</td>
+          <td>OpenStack, Kubernetes, general-purpose</td>
+        </tr>
+        <tr>
+          <td><strong>Max Tested Scale</strong></td>
+          <td>Exabytes, 100K+ clients</td>
+          <td>Exabytes, thousands of clients</td>
+          <td>Exabytes, 20K+ nodes</td>
+          <td>Petabytes, thousands of nodes</td>
+          <td>Exabytes, 10K+ OSDs</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================================================
+       PART 5: OBJECT STORAGE
+       ============================================================ -->
+  <div class="subsection" id="object-storage">
+    <h3>5. Object Storage</h3>
+
+    <p>Object storage organizes data as discrete objects in a flat namespace, each identified by a unique key. Unlike POSIX file systems, there is no directory hierarchy &mdash; objects are stored in buckets (containers) and accessed via HTTP-based APIs (primarily S3-compatible). This model scales massively and is ideal for storing large, immutable datasets.</p>
+
+    <div class="info-card">
+      <h4>S3-Compatible Object Storage</h4>
+      <p>The Amazon S3 API has become the de facto standard for object storage. Key operations:</p>
+      <ul>
+        <li><strong>PUT:</strong> Upload an object (with metadata and tags)</li>
+        <li><strong>GET:</strong> Download an object (supports byte-range requests for partial reads)</li>
+        <li><strong>DELETE:</strong> Remove an object</li>
+        <li><strong>LIST:</strong> Enumerate objects in a bucket (prefix-based filtering)</li>
+        <li><strong>Multipart Upload:</strong> Upload large objects in parallel chunks (required for objects &gt;5 GB)</li>
+      </ul>
+      <p>Object storage is <strong>not POSIX</strong>: no open/close semantics, no byte-range writes to existing objects (objects are immutable once written), no hard/soft links, no rename (copy + delete instead), and no append operations (with some vendor extensions). Applications must be designed for PUT/GET patterns.</p>
+    </div>
+
+    <h4>MinIO</h4>
+
+    <div class="expandable">
+      <button class="expandable-toggle">MinIO: High-Performance S3 Implementation</button>
+      <div class="expandable-content">
+        <p>MinIO is an open-source, S3-compatible object store designed for high performance on commodity hardware. It is written in Go and is commonly used as the object storage tier behind parallel file systems or as a standalone data lake.</p>
+
+        <p><strong>Performance:</strong> A single MinIO server with NVMe drives can deliver <strong>35+ GB/s GET</strong> and <strong>12+ GB/s PUT</strong> throughput. Distributed MinIO across 32 nodes with NVMe can achieve <strong>325+ GiB/s GET</strong>.</p>
+<pre><code class="language-bash"># Deploy MinIO distributed cluster (4 nodes, 4 drives each)
+minio server http://minio-{1...4}/data/disk-{1...4}
+
+# Configure mc (MinIO Client)
+mc alias set gpu-store http://minio-1:9000 ACCESSKEY SECRETKEY
+
+# Create a bucket for training data
+mc mb gpu-store/training-data
+
+# Upload a dataset with parallelism
+mc cp --recursive /local/datasets/imagenet/ gpu-store/training-data/imagenet/ \
+  --storage-class REDUCED_REDUNDANCY
+
+# Set lifecycle policy (delete old checkpoints after 30 days)
+mc ilm rule add gpu-store/checkpoints --expire-days 30 --prefix "epoch-"
+
+# Enable bucket versioning
+mc version enable gpu-store/model-artifacts
+
+# Server-side encryption with KMS
+mc encrypt set sse-s3 gpu-store/sensitive-data
+
+# Replicate to remote site
+mc replicate add gpu-store/training-data --remote-bucket backup-store/training-data
+
+# Erasure coding: MinIO uses Reed-Solomon EC by default
+# With 16 drives: EC:8 means 8 data + 8 parity (can lose 8 drives)
+# With 16 drives: EC:4 means 12 data + 4 parity (can lose 4 drives)</code></pre>
+      </div>
+    </div>
+
+    <h4>Use Cases in GPU Clusters</h4>
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>Use Case</th>
+          <th>Why Object Storage</th>
+          <th>Access Pattern</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Training datasets (large files)</td>
+          <td>Scales to petabytes; cheap; immutable data fits PUT/GET model</td>
+          <td>Bulk GET with prefetch into parallel FS or local NVMe</td>
+        </tr>
+        <tr>
+          <td>Model artifacts &amp; weights</td>
+          <td>Versioning; easy sharing across teams; cloud-portable</td>
+          <td>PUT after training; GET for inference deployment</td>
+        </tr>
+        <tr>
+          <td>Checkpoint archival</td>
+          <td>Lifecycle policies auto-delete old checkpoints; cheaper than SSD</td>
+          <td>PUT during training; rare GET for recovery</td>
+        </tr>
+        <tr>
+          <td>Logs &amp; metrics</td>
+          <td>Append-like pattern with immutable log segments; cheap at scale</td>
+          <td>PUT (write-once); batch GET for analysis</td>
+        </tr>
+        <tr>
+          <td>Data lake / analytics</td>
+          <td>Query engines (Spark, Trino) natively read S3; schema-on-read</td>
+          <td>Columnar scans (Parquet/ORC) via byte-range GET</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============================================================
+       PART 6: CEPH
+       ============================================================ -->
+  <div class="subsection" id="ceph-storage">
+    <h3>6. Ceph</h3>
+
+    <div class="info-card">
+      <h4>Ceph: Unified Distributed Storage</h4>
+      <p>Ceph is an open-source distributed storage system that provides <strong>three storage interfaces</strong> on top of a single unified storage backend (RADOS):</p>
+      <ul>
+        <li><strong>RBD (RADOS Block Device):</strong> Block-level storage. Thin-provisioned virtual disks. Used extensively as Kubernetes PersistentVolumes, OpenStack Cinder volumes, and VM disks.</li>
+        <li><strong>CephFS:</strong> POSIX-compliant distributed file system. Supports multiple active MDS servers for metadata scalability. Can serve as a parallel file system for HPC (though not as performant as Lustre/Weka for extreme-scale workloads).</li>
+        <li><strong>RGW (RADOS Gateway):</strong> S3-compatible and Swift-compatible object storage interface. Production-grade S3 implementation used by many organizations.</li>
+      </ul>
+    </div>
+
+    <h4>CRUSH Algorithm</h4>
+    <div class="info-card">
+      <h4>Controlled Replication Under Scalable Hashing (CRUSH)</h4>
+      <p>CRUSH is the heart of Ceph's data distribution. Instead of maintaining a centralized lookup table mapping objects to storage devices (which would be a bottleneck), CRUSH uses a <strong>deterministic algorithmic approach</strong>. Any client can compute the exact location of any object given:</p>
+      <ol>
+        <li>The object name (hashed to a <strong>placement group</strong>, or PG)</li>
+        <li>The <strong>CRUSH map</strong> (a hierarchical description of the storage topology: data centers, racks, hosts, OSDs)</li>
+        <li>The <strong>CRUSH rules</strong> (placement policies, e.g., &ldquo;place 3 replicas in 3 different racks&rdquo;)</li>
+      </ol>
+      <p>This eliminates any single point of failure for data location lookups and enables Ceph to scale to thousands of OSDs. When OSDs are added or removed, CRUSH deterministically rebalances the minimum amount of data.</p>
+    </div>
+
+    <h4>Architecture Components</h4>
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>Role</th>
+          <th>Typical Count</th>
+          <th>Resource Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>MON (Monitor)</strong></td>
+          <td>Maintains cluster map (OSD map, CRUSH map, PG map, MDS map). Paxos-based consensus for quorum.</td>
+          <td>3 or 5 (odd number for quorum)</td>
+          <td>Low CPU, moderate RAM, fast SSD for monitor store</td>
+        </tr>
+        <tr>
+          <td><strong>OSD (Object Storage Daemon)</strong></td>
+          <td>Stores data objects, handles replication/recovery/rebalancing. One OSD per physical disk (NVMe, SSD, or HDD).</td>
+          <td>10s to 10,000s</td>
+          <td>1&ndash;2 CPU cores per OSD, 4&ndash;8 GB RAM per OSD (NVMe: more)</td>
+        </tr>
+        <tr>
+          <td><strong>MDS (Metadata Server)</strong></td>
+          <td>Manages CephFS metadata (directory hierarchy, inodes). Not needed if only using RBD/RGW.</td>
+          <td>1+ active, 1+ standby</td>
+          <td>High CPU and RAM for large namespaces</td>
+        </tr>
+        <tr>
+          <td><strong>MGR (Manager)</strong></td>
+          <td>Provides monitoring, metrics (Prometheus), dashboard, orchestration, and module framework.</td>
+          <td>2 (active + standby)</td>
+          <td>Moderate CPU and RAM</td>
+        </tr>
+        <tr>
+          <td><strong>RGW (RADOS Gateway)</strong></td>
+          <td>S3/Swift-compatible HTTP gateway. Stateless &mdash; scale horizontally behind a load balancer.</td>
+          <td>2+ (behind LB)</td>
+          <td>CPU-bound for encryption; RAM for caching</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h4>Replication vs Erasure Coding</h4>
+
+    <div class="info-card">
+      <h4>Data Protection Strategies</h4>
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Replication (3x)</th>
+            <th>Erasure Coding (e.g., 8+3)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Storage Overhead</td><td>200% (3x raw capacity)</td><td>37.5% (for k=8, m=3)</td></tr>
+          <tr><td>Write Performance</td><td>Fast (parallel writes to replicas)</td><td>Slower (encode + write to k+m shards)</td></tr>
+          <tr><td>Read Performance</td><td>Fast (read from any replica)</td><td>Fast for full reads; slower for partial reads requiring reconstruction</td></tr>
+          <tr><td>Recovery Speed</td><td>Fast (copy from replica)</td><td>Slower (reconstruct from k shards)</td></tr>
+          <tr><td>Fault Tolerance</td><td>Survives 2 failures (with 3x)</td><td>Survives m failures (3 for 8+3)</td></tr>
+          <tr><td>Best For</td><td>Hot data, RBD, CephFS metadata pools</td><td>Cold/warm data, large objects, archival</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">Ceph Deployment &amp; Tuning for NVMe</button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># Deploy Ceph with cephadm (modern method)
+cephadm bootstrap --mon-ip 10.0.10.1 --cluster-network 10.0.20.0/24
+
+# Add hosts to the cluster
+ceph orch host add storage-01 10.0.10.2
+ceph orch host add storage-02 10.0.10.3
+ceph orch host add storage-03 10.0.10.4
+
+# Deploy OSDs on all available NVMe devices
+ceph orch apply osd --all-available-devices
+
+# Or target specific devices
+ceph orch daemon add osd storage-01:/dev/nvme0n1
+ceph orch daemon add osd storage-01:/dev/nvme1n1
+
+# Create an erasure-coded pool for training data
+ceph osd erasure-code-profile set ec-83 k=8 m=3 crush-failure-domain=host
+ceph osd pool create training-data-ec 128 erasure ec-83
+
+# Create a replicated pool for hot data (checkpoints)
+ceph osd pool create checkpoints 64 replicated
+ceph osd pool set checkpoints size 3 min_size 2
+
+# CephFS for POSIX access
+ceph fs volume create gpufs
+ceph fs subvolumegroup create gpufs training
+
+# NVMe OSD tuning (ceph.conf or central config)
+ceph config set osd bluestore_cache_size_ssd 8589934592    # 8GB cache per OSD
+ceph config set osd bluestore_min_alloc_size_ssd 4096      # 4K alloc for NVMe
+ceph config set osd osd_op_num_threads_per_shard_ssd 2
+ceph config set osd osd_memory_target 8589934592            # 8GB per OSD
+
+# Enable msgr2 (v2 protocol) for on-wire encryption
+ceph config set global ms_cluster_mode crc secure
+ceph config set global ms_client_mode crc secure
+
+# Check cluster health
+ceph status
+ceph osd tree
+ceph df detail
+
+# Integration with Kubernetes (Rook-Ceph)
+# Deploy Rook operator:
+kubectl apply -f https://raw.githubusercontent.com/rook/rook/release-1.14/deploy/examples/crds.yaml
+kubectl apply -f https://raw.githubusercontent.com/rook/rook/release-1.14/deploy/examples/operator.yaml
+kubectl apply -f https://raw.githubusercontent.com/rook/rook/release-1.14/deploy/examples/cluster.yaml</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       PART 7: NVMe AND NVMe-oF
+       ============================================================ -->
+  <div class="subsection" id="nvme-storage">
+    <h3>7. NVMe and NVMe-oF</h3>
+
+    <div class="info-card">
+      <h4>NVMe (Non-Volatile Memory Express)</h4>
+      <p>NVMe is a storage protocol designed specifically for flash (and future persistent memory) storage, running over the PCIe bus. It replaced the legacy AHCI/SATA protocol stack which was designed for spinning disks and had fundamental architectural limitations.</p>
+
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>AHCI (SATA)</th>
+            <th>NVMe</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Command Queues</td><td>1 queue, 32 commands</td><td><strong>65,535 queues, 65,536 commands each</strong></td></tr>
+          <tr><td>Interrupt Handling</td><td>Single interrupt, coalescing</td><td>MSI-X per-queue interrupts, direct CPU steering</td></tr>
+          <tr><td>Latency</td><td>~6&ndash;10 ms (HDD), ~100 &mu;s (SSD via SATA)</td><td><strong>&lt;10 &mu;s</strong> (PCIe Gen4/5 NVMe)</td></tr>
+          <tr><td>IOPS (peak)</td><td>~100K (SATA SSD)</td><td><strong>1&ndash;2M+ IOPS</strong> per device</td></tr>
+          <tr><td>Bandwidth</td><td>~550 MB/s (SATA III)</td><td><strong>7&ndash;14 GB/s</strong> (PCIe Gen4/Gen5 x4)</td></tr>
+          <tr><td>CPU Overhead</td><td>High (register-based, complex state machine)</td><td>Low (streamlined, minimal CPU cycles per I/O)</td></tr>
+        </tbody>
+      </table>
+
+      <p>A single PCIe Gen5 x4 NVMe SSD (e.g., Samsung PM1743, Kioxia CM7) delivers <strong>~14 GB/s sequential read</strong> and <strong>~2M+ random IOPS</strong>. A DGX H100 node with 8 local NVMe SSDs provides <strong>~100 GB/s</strong> of local storage bandwidth.</p>
+    </div>
+
+    <h4>NVMe-oF (NVMe over Fabrics)</h4>
+
+    <div class="info-card">
+      <h4>Extending NVMe Across the Network</h4>
+      <p>NVMe-oF extends the NVMe protocol over network fabrics, allowing a host to access remote NVMe devices with near-local performance. The remote NVMe namespaces appear as local <code>/dev/nvmeXnY</code> devices on the initiator host.</p>
+
+      <table class="spec-table">
+        <thead>
+          <tr>
+            <th>Transport</th>
+            <th>Underlying Network</th>
+            <th>Added Latency</th>
+            <th>Throughput</th>
+            <th>Pros</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>NVMe/RDMA</strong></td>
+            <td>InfiniBand or RoCEv2</td>
+            <td><strong>&lt;10 &mu;s</strong></td>
+            <td>Wire-speed (200&ndash;400 Gb/s)</td>
+            <td>Lowest latency; zero-copy; kernel bypass</td>
+          </tr>
+          <tr>
+            <td><strong>NVMe/TCP</strong></td>
+            <td>Standard Ethernet</td>
+            <td>~30&ndash;80 &mu;s</td>
+            <td>Near wire-speed (100&ndash;400 GbE)</td>
+            <td>No special NIC needed; works over any TCP/IP network</td>
+          </tr>
+          <tr>
+            <td><strong>NVMe/FC</strong></td>
+            <td>Fibre Channel</td>
+            <td>~20&ndash;50 &mu;s</td>
+            <td>32&ndash;128 Gb/s per port</td>
+            <td>Leverages existing FC infrastructure</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle">NVMe-oF Configuration Examples</button>
+      <div class="expandable-content">
+<pre><code class="language-bash"># === TARGET SIDE (Storage Server) ===
+
+# Load NVMe target modules
+modprobe nvmet
+modprobe nvmet-tcp      # For NVMe/TCP
+modprobe nvmet-rdma     # For NVMe/RDMA
+
+# Create a subsystem
+mkdir -p /sys/kernel/config/nvmet/subsystems/nvme-training-data
+cd /sys/kernel/config/nvmet/subsystems/nvme-training-data
+echo 1 > attr_allow_any_host
+
+# Create a namespace backed by a local NVMe device
+mkdir namespaces/1
+echo /dev/nvme0n1 > namespaces/1/device_path
+echo 1 > namespaces/1/enable
+
+# Create a TCP port
+mkdir -p /sys/kernel/config/nvmet/ports/1
+echo 10.0.50.10 > /sys/kernel/config/nvmet/ports/1/addr_traddr
+echo 4420 > /sys/kernel/config/nvmet/ports/1/addr_trsvcid
+echo tcp > /sys/kernel/config/nvmet/ports/1/addr_trtype
+echo ipv4 > /sys/kernel/config/nvmet/ports/1/addr_adrfam
+
+# Link subsystem to port
+ln -s /sys/kernel/config/nvmet/subsystems/nvme-training-data \
+      /sys/kernel/config/nvmet/ports/1/subsystems/nvme-training-data
+
+
+# === INITIATOR SIDE (Compute Node) ===
+
+# Load NVMe-oF client module
+modprobe nvme-tcp
+
+# Discover available subsystems
+nvme discover -t tcp -a 10.0.50.10 -s 4420
+
+# Connect to the remote NVMe subsystem
+nvme connect -t tcp -a 10.0.50.10 -s 4420 \
+  -n nvme-training-data --nr-io-queues=32
+
+# Verify the remote namespace appears as local device
+nvme list
+# /dev/nvme1n1  nvme-training-data  3.84 TB  ...
+
+# For RDMA transport:
+modprobe nvme-rdma
+nvme connect -t rdma -a 10.0.50.10 -s 4420 \
+  -n nvme-training-data --nr-io-queues=32
+
+# Performance test
+fio --name=seqread --ioengine=io_uring --direct=1 --bs=128k \
+  --numjobs=16 --iodepth=32 --rw=read --size=100G \
+  --filename=/dev/nvme1n1</code></pre>
+      </div>
+    </div>
+
+    <h4>NVIDIA GPUDirect Storage (GDS)</h4>
+
+    <div class="info-card">
+      <h4>Direct Path: NVMe to GPU Memory</h4>
+      <p>GPUDirect Storage (GDS) enables a direct DMA data path between NVMe storage (local or NVMe-oF) and GPU memory, <strong>completely bypassing the CPU and system memory</strong>. Without GDS, data must follow this path: NVMe &rarr; CPU/DRAM bounce buffer &rarr; GPU HBM. With GDS, the path becomes: NVMe &rarr; GPU HBM (via PCIe peer-to-peer or network RDMA).</p>
+
+      <p><strong>Benefits:</strong></p>
+      <ul>
+        <li>Eliminates CPU bounce buffer copies (reduces latency by 30&ndash;50%)</li>
+        <li>Frees CPU cores for other work (data preprocessing, scheduling)</li>
+        <li>Reduces system memory bandwidth consumption</li>
+        <li>Achieves up to <strong>~12 GB/s per GPU</strong> from local NVMe</li>
+        <li>Supported by cuFile API (part of CUDA toolkit) and integrated into major frameworks via kvikio library</li>
+      </ul>
+<pre><code class="language-bash"># Install GDS (included in CUDA toolkit 11.4+)
+apt install nvidia-gds
+
+# Verify GDS is functional
+/usr/local/cuda/gds/tools/gdscheck -p
+
+# GDS configuration (/etc/cufile.json)
+# {
+#   "logging": { "log_level": 1 },
+#   "properties": {
+#     "max_direct_io_size": "16M",
+#     "max_device_cache_size": "128M",
+#     "max_batch_io_size": "8M",
+#     "gds_rdma_write_support": true
+#   }
+# }
+
+# Benchmark GDS (included tool)
+/usr/local/cuda/gds/tools/gdsio -f /mnt/lustre/test_gds -d 0 \
+  -w 4 -s 10G -i 1M -x 0 -I 1
+
+# Python with kvikio (cuFile bindings)
+# import kvikio
+# f = kvikio.CuFile("/mnt/weka/data.bin", "r")
+# buf = cupy.empty(1_000_000, dtype="float32")
+# f.read(buf)  # Direct NVMe -> GPU transfer</code></pre>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       PART 8: STORAGE NETWORKING
+       ============================================================ -->
+  <div class="subsection" id="storage-networking">
+    <h3>8. Storage Networking</h3>
+
+    <div class="callout callout-info">
+      <h4>Separation of Concerns: Dedicated Storage Fabric</h4>
+      <p>In GPU Superpod deployments, the storage network is <strong>physically separate</strong> from the GPU compute fabric (InfiniBand for NCCL/collective communication). Storage typically runs over a dedicated Ethernet network (100GbE or 200GbE) to avoid interference with GPU-to-GPU traffic. Some deployments use a dedicated InfiniBand partition for storage (LNET over o2ib), while others use separate Ethernet switches entirely.</p>
+    </div>
+
+    <!-- STORAGE NETWORK TOPOLOGY SVG -->
+    <div class="diagram-container">
+      <h4>Storage Network Topology: GPU Cluster with Dedicated Storage Fabric</h4>
+      <svg viewBox="0 0 920 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram showing dedicated storage network fabric connecting compute nodes to parallel file system and object storage">
+        <defs>
+          <marker id="arr-stor-net" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#4dabf7"/></marker>
+          <marker id="arr-comp" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#76b900"/></marker>
+          <linearGradient id="sw-grad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#4dabf7"/><stop offset="100%" stop-color="#1971c2"/></linearGradient>
+          <linearGradient id="ib-grad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#76b900"/><stop offset="100%" stop-color="#5a8f00"/></linearGradient>
+        </defs>
+
+        <text x="460" y="25" text-anchor="middle" font-size="15" font-weight="bold" fill="#e0e0e0">Dual-Fabric Architecture: Compute + Storage Networks</text>
+
+        <!-- Compute fabric label -->
+        <rect x="30" y="45" width="180" height="28" rx="6" fill="url(#ib-grad)" opacity="0.85"/>
+        <text x="120" y="64" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">InfiniBand Compute Fabric</text>
+
+        <!-- IB Spine switches -->
+        <rect x="60" y="85" width="140" height="35" rx="6" fill="#3a7a00" stroke="#76b900" stroke-width="1.2"/>
+        <text x="130" y="107" text-anchor="middle" font-size="10" font-weight="bold" fill="#e0f0c0">IB Spine (400G NDR)</text>
+
+        <!-- IB Leaf switches -->
+        <rect x="30" y="140" width="120" height="30" rx="5" fill="#2a5a00" stroke="#76b900" stroke-width="1"/>
+        <text x="90" y="160" text-anchor="middle" font-size="9" fill="#c0e090">IB Leaf 0</text>
+        <rect x="160" y="140" width="120" height="30" rx="5" fill="#2a5a00" stroke="#76b900" stroke-width="1"/>
+        <text x="220" y="160" text-anchor="middle" font-size="9" fill="#c0e090">IB Leaf 1</text>
+
+        <!-- Lines: spine to leaf -->
+        <line x1="100" y1="120" x2="90" y2="140" stroke="#76b900" stroke-width="1.5"/>
+        <line x1="160" y1="120" x2="220" y2="140" stroke="#76b900" stroke-width="1.5"/>
+
+        <!-- Storage fabric label -->
+        <rect x="380" y="45" width="180" height="28" rx="6" fill="url(#sw-grad)" opacity="0.85"/>
+        <text x="470" y="64" text-anchor="middle" font-size="11" font-weight="bold" fill="#fff">Ethernet Storage Fabric</text>
+
+        <!-- Eth Spine switches -->
+        <rect x="360" y="85" width="210" height="35" rx="6" fill="#1a5a8f" stroke="#4dabf7" stroke-width="1.2"/>
+        <text x="465" y="107" text-anchor="middle" font-size="10" font-weight="bold" fill="#d0e8ff">Eth Spine (200GbE)</text>
+
+        <!-- Eth Leaf switches -->
+        <rect x="340" y="140" width="120" height="30" rx="5" fill="#143f6a" stroke="#4dabf7" stroke-width="1"/>
+        <text x="400" y="160" text-anchor="middle" font-size="9" fill="#a0c8e8">Eth Leaf 0</text>
+        <rect x="470" y="140" width="120" height="30" rx="5" fill="#143f6a" stroke="#4dabf7" stroke-width="1"/>
+        <text x="530" y="160" text-anchor="middle" font-size="9" fill="#a0c8e8">Eth Leaf 1</text>
+
+        <!-- Lines: spine to leaf -->
+        <line x1="430" y1="120" x2="400" y2="140" stroke="#4dabf7" stroke-width="1.5"/>
+        <line x1="500" y1="120" x2="530" y2="140" stroke="#4dabf7" stroke-width="1.5"/>
+
+        <!-- Management network label -->
+        <rect x="700" y="45" width="180" height="28" rx="6" fill="#555" opacity="0.85"/>
+        <text x="790" y="64" text-anchor="middle" font-size="11" font-weight="bold" fill="#ddd">Mgmt Network (1/10GbE)</text>
+        <rect x="730" y="85" width="120" height="30" rx="5" fill="#444" stroke="#777" stroke-width="1"/>
+        <text x="790" y="105" text-anchor="middle" font-size="9" fill="#bbb">Mgmt Switch</text>
+
+        <!-- GPU Compute Nodes -->
+        <text x="170" y="210" text-anchor="middle" font-size="12" font-weight="bold" fill="#ccc">GPU Compute Nodes</text>
+
+        <rect x="30" y="220" width="130" height="80" rx="8" fill="#1a1a2e" stroke="#76b900" stroke-width="1.5"/>
+        <text x="95" y="242" text-anchor="middle" font-size="10" font-weight="bold" fill="#76b900">DGX H100 #0</text>
+        <text x="95" y="258" text-anchor="middle" font-size="8" fill="#aaa">8x H100 GPUs</text>
+        <text x="95" y="272" text-anchor="middle" font-size="8" fill="#76b900">IB: 8x NDR 400G</text>
+        <text x="95" y="286" text-anchor="middle" font-size="8" fill="#4dabf7">Eth: 2x 200GbE</text>
+
+        <rect x="170" y="220" width="130" height="80" rx="8" fill="#1a1a2e" stroke="#76b900" stroke-width="1.5"/>
+        <text x="235" y="242" text-anchor="middle" font-size="10" font-weight="bold" fill="#76b900">DGX H100 #1</text>
+        <text x="235" y="258" text-anchor="middle" font-size="8" fill="#aaa">8x H100 GPUs</text>
+        <text x="235" y="272" text-anchor="middle" font-size="8" fill="#76b900">IB: 8x NDR 400G</text>
+        <text x="235" y="286" text-anchor="middle" font-size="8" fill="#4dabf7">Eth: 2x 200GbE</text>
+
+        <text x="320" y="265" font-size="14" fill="#888">. . .</text>
+
+        <!-- Lines: GPU nodes to IB leaves -->
+        <line x1="80" y1="220" x2="80" y2="170" stroke="#76b900" stroke-width="1.2"/>
+        <line x1="200" y1="220" x2="200" y2="170" stroke="#76b900" stroke-width="1.2"/>
+
+        <!-- Lines: GPU nodes to Eth leaves (storage) -->
+        <line x1="110" y1="220" x2="390" y2="170" stroke="#4dabf7" stroke-width="1" stroke-dasharray="5,3"/>
+        <line x1="250" y1="220" x2="400" y2="170" stroke="#4dabf7" stroke-width="1" stroke-dasharray="5,3"/>
+
+        <!-- Storage Servers -->
+        <text x="470" y="210" text-anchor="middle" font-size="12" font-weight="bold" fill="#ccc">Storage Servers</text>
+
+        <!-- Parallel FS -->
+        <rect x="360" y="225" width="100" height="80" rx="8" fill="#1a1a2e" stroke="#e63946" stroke-width="1.5"/>
+        <text x="410" y="247" text-anchor="middle" font-size="9" font-weight="bold" fill="#e63946">Lustre MDS</text>
+        <text x="410" y="262" text-anchor="middle" font-size="8" fill="#aaa">2x MDS (HA)</text>
+        <text x="410" y="276" text-anchor="middle" font-size="8" fill="#aaa">NVMe MDTs</text>
+        <text x="410" y="290" text-anchor="middle" font-size="8" fill="#4dabf7">2x 200GbE</text>
+
+        <rect x="470" y="225" width="100" height="80" rx="8" fill="#1a1a2e" stroke="#4dabf7" stroke-width="1.5"/>
+        <text x="520" y="247" text-anchor="middle" font-size="9" font-weight="bold" fill="#4dabf7">Lustre OSS x16</text>
+        <text x="520" y="262" text-anchor="middle" font-size="8" fill="#aaa">2 OSTs per OSS</text>
+        <text x="520" y="276" text-anchor="middle" font-size="8" fill="#aaa">NVMe JBOFs</text>
+        <text x="520" y="290" text-anchor="middle" font-size="8" fill="#4dabf7">2x 200GbE each</text>
+
+        <!-- Object Storage -->
+        <rect x="580" y="225" width="100" height="80" rx="8" fill="#1a1a2e" stroke="#f59f00" stroke-width="1.5"/>
+        <text x="630" y="247" text-anchor="middle" font-size="9" font-weight="bold" fill="#f59f00">Object Store</text>
+        <text x="630" y="262" text-anchor="middle" font-size="8" fill="#aaa">MinIO / Ceph RGW</text>
+        <text x="630" y="276" text-anchor="middle" font-size="8" fill="#aaa">HDD + SSD tiers</text>
+        <text x="630" y="290" text-anchor="middle" font-size="8" fill="#4dabf7">2x 100GbE</text>
+
+        <!-- Lines: storage to Eth leaves -->
+        <line x1="410" y1="225" x2="410" y2="170" stroke="#4dabf7" stroke-width="1.2"/>
+        <line x1="520" y1="225" x2="520" y2="170" stroke="#4dabf7" stroke-width="1.2"/>
+        <line x1="630" y1="225" x2="540" y2="170" stroke="#4dabf7" stroke-width="1.2"/>
+
+        <!-- NAS Server -->
+        <rect x="700" y="225" width="100" height="80" rx="8" fill="#1a1a2e" stroke="#888" stroke-width="1.5"/>
+        <text x="750" y="247" text-anchor="middle" font-size="9" font-weight="bold" fill="#aaa">NAS / NFS</text>
+        <text x="750" y="262" text-anchor="middle" font-size="8" fill="#aaa">Home dirs</text>
+        <text x="750" y="276" text-anchor="middle" font-size="8" fill="#aaa">Config files</text>
+        <text x="750" y="290" text-anchor="middle" font-size="8" fill="#4dabf7">2x 25GbE</text>
+        <line x1="750" y1="225" x2="560" y2="170" stroke="#888" stroke-width="1" stroke-dasharray="4,3"/>
+
+        <!-- DPU offload label -->
+        <rect x="30" y="320" width="860" height="55" rx="8" fill="rgba(77,171,247,0.08)" stroke="#4dabf7" stroke-width="1" stroke-dasharray="6,3"/>
+        <text x="460" y="340" text-anchor="middle" font-size="11" font-weight="bold" fill="#4dabf7">BlueField DPU Storage Offload Layer</text>
+        <text x="460" y="358" text-anchor="middle" font-size="9" fill="#8abae0">NVMe-oF target, NVMe SNAP (virtio-blk), storage encryption, compression, RAID offload &mdash; runs on DPU ARM cores</text>
+
+        <!-- JBOF / Storage Backend -->
+        <text x="460" y="405" text-anchor="middle" font-size="12" font-weight="bold" fill="#ccc">Storage Backend Hardware</text>
+
+        <rect x="80" y="420" width="150" height="70" rx="8" fill="#1a1a2e" stroke="#e63946" stroke-width="1"/>
+        <text x="155" y="442" text-anchor="middle" font-size="10" font-weight="bold" fill="#e63946">NVMe JBOF</text>
+        <text x="155" y="458" text-anchor="middle" font-size="8" fill="#aaa">24x NVMe U.2 drives</text>
+        <text x="155" y="472" text-anchor="middle" font-size="8" fill="#aaa">~180 TB raw per shelf</text>
+        <text x="155" y="484" text-anchor="middle" font-size="8" fill="#ddd">Hot tier: training data</text>
+
+        <rect x="260" y="420" width="150" height="70" rx="8" fill="#1a1a2e" stroke="#f59f00" stroke-width="1"/>
+        <text x="335" y="442" text-anchor="middle" font-size="10" font-weight="bold" fill="#f59f00">SSD JBOD</text>
+        <text x="335" y="458" text-anchor="middle" font-size="8" fill="#aaa">60x SATA/SAS SSD</text>
+        <text x="335" y="472" text-anchor="middle" font-size="8" fill="#aaa">~500 TB raw per shelf</text>
+        <text x="335" y="484" text-anchor="middle" font-size="8" fill="#ddd">Warm tier: recent checkpoints</text>
+
+        <rect x="440" y="420" width="150" height="70" rx="8" fill="#1a1a2e" stroke="#888" stroke-width="1"/>
+        <text x="515" y="442" text-anchor="middle" font-size="10" font-weight="bold" fill="#aaa">HDD JBOD</text>
+        <text x="515" y="458" text-anchor="middle" font-size="8" fill="#aaa">90x 20TB nearline SAS</text>
+        <text x="515" y="472" text-anchor="middle" font-size="8" fill="#aaa">~1.8 PB raw per shelf</text>
+        <text x="515" y="484" text-anchor="middle" font-size="8" fill="#ddd">Cold tier: archived data</text>
+
+        <rect x="620" y="420" width="150" height="70" rx="8" fill="#1a1a2e" stroke="#555" stroke-width="1"/>
+        <text x="695" y="442" text-anchor="middle" font-size="10" font-weight="bold" fill="#888">Tape Library</text>
+        <text x="695" y="458" text-anchor="middle" font-size="8" fill="#aaa">LTO-9 (18 TB/cart)</text>
+        <text x="695" y="472" text-anchor="middle" font-size="8" fill="#aaa">1000s of cartridges</text>
+        <text x="695" y="484" text-anchor="middle" font-size="8" fill="#ddd">Archive: long-term retention</text>
+
+        <!-- Legend -->
+        <rect x="60" y="520" width="800" height="65" rx="6" fill="rgba(255,255,255,0.03)" stroke="#555" stroke-width="0.5"/>
+        <text x="80" y="540" font-size="10" font-weight="bold" fill="#ccc">Network Legend:</text>
+        <line x1="80" y1="555" x2="120" y2="555" stroke="#76b900" stroke-width="2"/>
+        <text x="130" y="559" font-size="9" fill="#aaa">InfiniBand NDR 400G (GPU compute / NCCL)</text>
+        <line x1="400" y1="555" x2="440" y2="555" stroke="#4dabf7" stroke-width="2"/>
+        <text x="450" y="559" font-size="9" fill="#aaa">200GbE Ethernet (storage fabric)</text>
+        <line x1="680" y1="555" x2="720" y2="555" stroke="#888" stroke-width="2" stroke-dasharray="5,3"/>
+        <text x="730" y="559" font-size="9" fill="#aaa">Management / low-bandwidth</text>
+      </svg>
+    </div>
+
+    <h4>RAID Levels and Beyond</h4>
+
+    <table class="spec-table">
+      <thead>
+        <tr>
+          <th>RAID Level</th>
+          <th>Description</th>
+          <th>Min Disks</th>
+          <th>Fault Tolerance</th>
+          <th>Usable Capacity</th>
+          <th>HPC Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>RAID 0</strong></td><td>Striping only (no parity)</td><td>2</td><td>0 (any failure = total loss)</td><td>100%</td><td>Scratch / temp only</td></tr>
+        <tr><td><strong>RAID 1</strong></td><td>Mirroring</td><td>2</td><td>1 disk failure</td><td>50%</td><td>OS / boot drives</td></tr>
+        <tr><td><strong>RAID 5</strong></td><td>Striping + distributed parity</td><td>3</td><td>1 disk failure</td><td>(N-1)/N</td><td>Rarely used for HPC (write penalty, slow rebuild)</td></tr>
+        <tr><td><strong>RAID 6</strong></td><td>Striping + double parity</td><td>4</td><td>2 disk failures</td><td>(N-2)/N</td><td>Better protection; still slow rebuild on large disks</td></tr>
+        <tr><td><strong>RAID 10</strong></td><td>Mirrored stripes</td><td>4</td><td>1 per mirror pair</td><td>50%</td><td>Good performance; used for metadata (MDT/MDS)</td></tr>
+        <tr><td><strong>Erasure Coding</strong></td><td>Reed-Solomon or similar across nodes</td><td>k+m</td><td>m failures</td><td>k/(k+m)</td><td>Preferred at scale (Ceph, MinIO, Weka); node-level protection</td></tr>
+      </tbody>
+    </table>
+
+    <h4>ZFS for Storage Servers</h4>
+
+    <div class="expandable">
+      <button class="expandable-toggle">ZFS Features for HPC Storage</button>
+      <div class="expandable-content">
+        <p>ZFS is a combined volume manager and file system that provides data integrity, compression, and flexible storage management. It is used as the backend filesystem on Lustre OST/MDT devices and on Ceph OSD nodes.</p>
+<pre><code class="language-bash"># Create a ZFS pool with RAID-Z2 (double parity, similar to RAID 6)
+zpool create -o ashift=12 tank raidz2 \
+  /dev/nvme0n1 /dev/nvme1n1 /dev/nvme2n1 /dev/nvme3n1 \
+  /dev/nvme4n1 /dev/nvme5n1 /dev/nvme6n1 /dev/nvme7n1
+
+# Add a special allocation class (metadata on fast NVMe)
+zpool add tank special mirror /dev/nvme8n1 /dev/nvme9n1
+
+# Add L2ARC read cache
+zpool add tank cache /dev/nvme10n1
+
+# Add SLOG (ZIL) for synchronous write acceleration
+zpool add tank log mirror /dev/nvme11n1 /dev/nvme12n1
+
+# Enable compression (LZ4 is fast with ~2:1 ratio on many datasets)
+zfs set compression=lz4 tank
+
+# Enable checksumming (default: on, using fletcher4 or sha256)
+zfs set checksum=sha256 tank
+
+# Create datasets (filesystems)
+zfs create -o recordsize=1M tank/training-data     # Large block for sequential I/O
+zfs create -o recordsize=16K tank/metadata          # Small block for metadata
+zfs create -o recordsize=128K tank/checkpoints
+
+# Snapshots (instantaneous, copy-on-write)
+zfs snapshot tank/checkpoints@epoch-5000
+zfs list -t snapshot
+
+# Send snapshot to remote for backup (incremental)
+zfs send -i tank/checkpoints@epoch-4000 tank/checkpoints@epoch-5000 | \
+  ssh backup-server zfs recv tank-backup/checkpoints
+
+# ARC (Adaptive Replacement Cache) tuning
+echo 68719476736 > /sys/module/zfs/parameters/zfs_arc_max  # 64GB ARC</code></pre>
+      </div>
+    </div>
+
+    <h4>BlueField DPU for Storage Offload</h4>
+
+    <div class="info-card">
+      <h4>NVIDIA BlueField DPU: Storage Acceleration</h4>
+      <p>The NVIDIA BlueField-3 DPU (Data Processing Unit) integrates an ARM CPU complex, ConnectX-7 network adapter, and hardware accelerators onto a single SmartNIC. For storage, it offloads:</p>
+      <ul>
+        <li><strong>NVMe-oF Target:</strong> The DPU can present local NVMe devices as NVMe-oF targets without consuming host CPU cycles. NVIDIA SNAP (Software-defined Network Accelerated Processing) exposes NVMe namespaces as virtio-blk devices to VMs/containers.</li>
+        <li><strong>Encryption:</strong> AES-XTS hardware acceleration for at-rest and in-flight storage encryption at line rate (400 Gb/s).</li>
+        <li><strong>Compression:</strong> Hardware LZ4/Deflate compression engine for inline data reduction.</li>
+        <li><strong>Erasure Coding:</strong> Hardware-accelerated Reed-Solomon encoding for distributed parity without host CPU overhead.</li>
+        <li><strong>Storage virtualization:</strong> Multi-tenant NVMe namespace isolation with SR-IOV and hardware-enforced QoS.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       QUIZ SECTION
+       ============================================================ -->
+  <div class="subsection" id="storage-quiz">
+    <h3>Knowledge Check: Storage Architecture</h3>
+
+    <div class="quiz-container" id="quiz-storage">
+
+      <!-- Question 1 -->
+      <div class="quiz-question" data-question="1">
+        <h4>Question 1</h4>
+        <p>In a Lustre parallel file system, what is the primary role of the OSS (Object Storage Server), and how does file striping improve performance?</p>
+        <div class="quiz-options">
+          <label class="quiz-option">
+            <input type="radio" name="storage-q1" value="a">
+            <span>The OSS stores file metadata (names, permissions, directory structure) and striping duplicates files across multiple servers for redundancy, improving read reliability.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q1" value="b">
+            <span>The OSS handles actual file data I/O through its OSTs. File striping splits a single file into chunks distributed across multiple OSTs on different OSS nodes, allowing the Lustre client to read/write to all of them in parallel, multiplying aggregate throughput proportional to the stripe count.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q1" value="c">
+            <span>The OSS manages network routing between Lustre clients and the MDS. Striping compresses file data across multiple OSTs to reduce storage consumption by 50%.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q1" value="d">
+            <span>The OSS is a backup metadata server that takes over if the MDS fails. Striping replicates metadata across OSTs for faster directory listings.</span>
+          </label>
+        </div>
+        <div class="quiz-answer" data-correct="b">
+          <p><strong>Correct answer: B.</strong> The OSS (Object Storage Server) is responsible for storing and serving file data through its OSTs (Object Storage Targets). When a file is striped with <code>lfs setstripe -c 4</code>, the file is divided into fixed-size chunks that are distributed round-robin across 4 different OSTs, potentially on 4 different OSS nodes. The Lustre client opens parallel connections to all relevant OSS servers simultaneously, achieving N-times the throughput of a single server (where N is the stripe count). This is the fundamental mechanism that allows Lustre to deliver hundreds of GB/s of aggregate bandwidth. The MDS (not the OSS) handles metadata, and striping is about parallelism, not redundancy or compression.</p>
+        </div>
+      </div>
+
+      <!-- Question 2 -->
+      <div class="quiz-question" data-question="2">
+        <h4>Question 2</h4>
+        <p>What is the key advantage of NVMe-oF/RDMA over NVMe-oF/TCP for GPU cluster storage, and how does GPUDirect Storage (GDS) further optimize the data path?</p>
+        <div class="quiz-options">
+          <label class="quiz-option">
+            <input type="radio" name="storage-q2" value="a">
+            <span>NVMe/RDMA provides lower latency (&lt;10 &mu;s added) via kernel bypass and zero-copy transfers over InfiniBand or RoCEv2, while NVMe/TCP adds 30&ndash;80 &mu;s due to TCP/IP stack processing. GDS eliminates the CPU bounce buffer entirely, enabling direct DMA from remote NVMe storage into GPU HBM memory without touching system DRAM, reducing latency and freeing CPU and memory bandwidth.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q2" value="b">
+            <span>NVMe/RDMA uses larger packet sizes (64KB MTU) compared to TCP's 1500-byte MTU, achieving 10x higher throughput. GDS compresses data in-flight between the NVMe device and GPU to double effective bandwidth.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q2" value="c">
+            <span>NVMe/RDMA encrypts all data in transit for security, while TCP does not. GDS adds an encryption layer between GPU memory and NVMe storage to protect model weights.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q2" value="d">
+            <span>NVMe/RDMA requires no network switches (direct connect only), reducing cost. GDS caches frequently accessed storage blocks in GPU L2 cache for repeat access.</span>
+          </label>
+        </div>
+        <div class="quiz-answer" data-correct="a">
+          <p><strong>Correct answer: A.</strong> NVMe-oF/RDMA adds less than 10 microseconds of latency to local NVMe access by using RDMA (Remote Direct Memory Access), which bypasses the kernel network stack entirely and performs zero-copy transfers directly between NIC and application buffers. NVMe/TCP, while more universally deployable over standard Ethernet, must traverse the full TCP/IP stack, adding 30&ndash;80 &mu;s of latency. GPUDirect Storage takes this further by establishing a direct DMA path from the NVMe device (local or remote via NVMe-oF) to GPU HBM memory. Without GDS, data follows: NVMe &rarr; system DRAM (bounce buffer) &rarr; GPU HBM (two copies, consuming CPU cycles and memory bandwidth). With GDS: NVMe &rarr; GPU HBM (one transfer, zero CPU involvement).</p>
+        </div>
+      </div>
+
+      <!-- Question 3 -->
+      <div class="quiz-question" data-question="3">
+        <h4>Question 3</h4>
+        <p>A team is designing storage for a 512-GPU training cluster. Training data is 2 PB, and checkpoints of 800 GB are written every 20 minutes. They need at least 400 GB/s sustained read throughput and POSIX semantics. The data should automatically tier to S3 when cold. Which storage architecture is most appropriate?</p>
+        <div class="quiz-options">
+          <label class="quiz-option">
+            <input type="radio" name="storage-q3" value="a">
+            <span>A large NFS v4.1 (pNFS) cluster with 20 data servers, each with 100GbE connectivity. pNFS provides parallel I/O and POSIX semantics, and scripts can periodically sync cold data to S3 with aws s3 sync.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q3" value="b">
+            <span>WekaFS deployed on 40+ NVMe-backed storage nodes with 200GbE networking. WekaFS provides full POSIX compliance, can deliver 400+ GB/s with linear scaling, has native S3 tiering built-in for automatic cold data migration, and supports GPUDirect Storage for optimal GPU data loading.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q3" value="c">
+            <span>MinIO object storage cluster with 50 nodes. Applications read training data via S3 GET requests with byte-range support, and checkpoints are written as S3 multipart uploads.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="storage-q3" value="d">
+            <span>Ceph with CephFS for POSIX access and RGW for S3. Deploy 200 OSDs across 20 nodes with 3x replication for hot data and erasure coding for cold data.</span>
+          </label>
+        </div>
+        <div class="quiz-answer" data-correct="b">
+          <p><strong>Correct answer: B.</strong> WekaFS is the best fit for this workload profile. The requirements include: (1) 400 GB/s sustained throughput, which WekaFS can achieve with linear scaling across NVMe-backed nodes; (2) POSIX semantics, which WekaFS fully supports; (3) automatic S3 tiering, which is a native built-in feature of WekaFS (not a bolt-on script); and (4) the scale of 512 GPUs with 2 PB of data and frequent large checkpoint writes. Option A (pNFS) cannot realistically deliver 400 GB/s and has no native S3 tiering. Option C (MinIO) does not provide POSIX semantics, which are required for most ML training frameworks that use standard file I/O. Option D (CephFS) could technically work but would struggle to consistently deliver 400 GB/s at the required latency &mdash; CephFS is not optimized for GPU/HPC workloads at this scale, and 3x replication for 2 PB would require 6 PB of raw capacity. WekaFS with its kernel-bypass client, flash-optimized architecture, and native tiering is purpose-built for exactly this use case.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</section>

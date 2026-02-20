@@ -1,0 +1,1302 @@
+<section id="virtual-networking" class="content-section" data-layer="4">
+
+  <div class="section-header">
+    <h2>Virtual Networking &amp; Overlay Fabrics</h2>
+    <p class="section-subtitle">Software-defined networking with Open vSwitch, VXLAN overlays, DPDK acceleration, and hardware offload for GPU-dense HPC clusters</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 1. Open vSwitch (OVS) Deep Dive                              -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="ovs-deep-dive">
+    <h3>1. Open vSwitch (OVS) Deep Dive</h3>
+
+    <p>
+      Open vSwitch is a production-quality, multilayer, software-defined virtual switch.
+      Licensed under Apache 2.0, it is the de-facto standard virtual switch in datacenter
+      environments running OpenStack, Kubernetes, and bare-metal GPU clusters. OVS implements
+      the OpenFlow protocol, enabling centralized SDN controllers to program forwarding
+      behavior across thousands of hosts from a single control point.
+    </p>
+
+    <div class="callout callout-info">
+      <strong>Why OVS in an HPC / GPU Superpod?</strong>
+      In NVIDIA DGX SuperPOD deployments, OVS is used on host nodes and inside BlueField
+      DPU ARM cores to steer storage (NVMe-oF), management, and in-band control traffic
+      while keeping the high-speed InfiniBand / RoCE GPU-to-GPU data plane untouched.
+    </div>
+
+    <h4>Core Architecture</h4>
+    <p>OVS is composed of four tightly-coupled components:</p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Runs In</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ovs-vswitchd</code></td>
+            <td>Userspace (daemon)</td>
+            <td>Main forwarding daemon. Implements OpenFlow pipeline, communicates with ovsdb-server for config and with kernel/DPDK datapath for fast-path forwarding. Handles flow table lookups, flow installation, and slow-path packet processing (table-miss packets sent up from kernel).</td>
+          </tr>
+          <tr>
+            <td><code>ovsdb-server</code></td>
+            <td>Userspace (daemon)</td>
+            <td>Persistent configuration database using the OVSDB protocol (RFC 7047). Stores bridge, port, interface, QoS, mirror, and controller configuration. Accessed via <code>ovs-vsctl</code> CLI or direct JSON-RPC. Supports clustering for HA (raft-based consensus since OVS 2.9).</td>
+          </tr>
+          <tr>
+            <td>Kernel Datapath (<code>openvswitch.ko</code>)</td>
+            <td>Kernel module</td>
+            <td>High-speed fast path. Receives packets from NICs and virtual ports, performs exact-match flow lookup in a hash table, and executes cached actions (output, set-field, encap/decap). On a miss, packets are sent to <code>ovs-vswitchd</code> via Netlink for OpenFlow classification; the resulting actions are then cached in the kernel for subsequent packets of the same flow.</td>
+          </tr>
+          <tr>
+            <td>Userspace Datapath (DPDK)</td>
+            <td>Userspace (PMD threads)</td>
+            <td>Replaces the kernel datapath entirely. Uses DPDK poll-mode drivers to bypass the kernel networking stack. Packets are read directly from NIC RX queues via memory-mapped DMA, processed in userspace, and written to TX queues &mdash; achieving 10&ndash;100x throughput improvement with deterministic latency. Requires hugepages and dedicated CPU cores.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Key Concepts</h4>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Bridges (br0, br-int, br-ex)</button>
+      <div class="expandable-content">
+        <p>
+          An OVS bridge is a virtual Ethernet switch, analogous to a physical L2 switch. Each bridge
+          has its own MAC learning table, STP/RSTP instance, and OpenFlow pipeline. In a typical
+          OpenStack or cloud deployment, three bridges are standard:
+        </p>
+        <ul>
+          <li><strong>br-int</strong> (integration bridge) &mdash; Every VM tap port, container veth, and internal service port lands here. All tenant traffic enters the OVS forwarding pipeline through br-int. OpenFlow rules on this bridge handle VLAN tagging, security group enforcement (via conntrack), and routing to other bridges.</li>
+          <li><strong>br-ex</strong> (external bridge) &mdash; Connected to the physical NIC(s) that provide upstream connectivity. Floating IPs, SNAT, and provider network traffic egress through br-ex to the physical fabric.</li>
+          <li><strong>br-tun</strong> (tunnel bridge) &mdash; Handles VXLAN/GRE/Geneve encapsulation and decapsulation. Patch ports connect br-int to br-tun; tunnel ports connect br-tun to remote VTEPs. Flow rules map internal VLAN tags to VNIs for each tenant network.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Ports: internal, system, tap, patch, VXLAN, GRE</button>
+      <div class="expandable-content">
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Port Type</th>
+                <th>Description</th>
+                <th>Typical Use</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>system</code></td>
+                <td>Represents a Linux network interface (e.g., <code>eth0</code>, <code>ens3f0</code>). OVS takes over the port and handles all traffic.</td>
+                <td>Uplink to physical network</td>
+              </tr>
+              <tr>
+                <td><code>internal</code></td>
+                <td>Creates a virtual network interface in the host. The bridge's local port (<code>br0</code>) is always internal. Additional internal ports can serve as management IPs on the bridge.</td>
+                <td>Host management IP on bridge</td>
+              </tr>
+              <tr>
+                <td><code>tap</code></td>
+                <td>TUN/TAP device created by hypervisor (QEMU/KVM) or container runtime. Appears as a system port to OVS.</td>
+                <td>VM connectivity</td>
+              </tr>
+              <tr>
+                <td><code>patch</code></td>
+                <td>Software-only port connecting two OVS bridges in-memory (no kernel overhead). Always created in pairs.</td>
+                <td>br-int &harr; br-ex, br-int &harr; br-tun</td>
+              </tr>
+              <tr>
+                <td><code>vxlan</code></td>
+                <td>VXLAN tunnel endpoint. Encapsulates L2 frames in UDP/IP. Configured with <code>remote_ip</code> and <code>key</code> (VNI).</td>
+                <td>Overlay networking across L3</td>
+              </tr>
+              <tr>
+                <td><code>gre</code></td>
+                <td>GRE tunnel endpoint. Encapsulates L2 frames in GRE/IP. Lower overhead than VXLAN (no UDP) but no entropy for ECMP.</td>
+                <td>Legacy overlay tunnels</td>
+              </tr>
+              <tr>
+                <td><code>geneve</code></td>
+                <td>Generic Network Virtualization Encapsulation. Extensible TLV-based metadata. Preferred in modern deployments (OVN default).</td>
+                <td>OVN-based clouds, metadata-rich overlays</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">OpenFlow Rules: Matching, Actions &amp; Multi-Table Pipeline</button>
+      <div class="expandable-content">
+        <p>
+          OVS implements the OpenFlow protocol (versions 1.0 through 1.5). Each bridge has up to
+          255 flow tables (table 0 through 254). Packets enter at table 0 and traverse tables via
+          <code>resubmit</code> or <code>goto_table</code> actions. Each flow rule has:
+        </p>
+        <ul>
+          <li><strong>Priority</strong> (0&ndash;65535): higher wins on match</li>
+          <li><strong>Match fields</strong>: in_port, dl_src, dl_dst, dl_type, dl_vlan, nw_src, nw_dst, nw_proto, tp_src, tp_dst, metadata, tunnel_id, reg0&ndash;reg15, and more</li>
+          <li><strong>Actions</strong>: output, drop, mod_dl_dst, mod_nw_src, push_vlan, pop_vlan, set_tunnel, set_field, ct (conntrack), group, meter, resubmit, goto_table</li>
+          <li><strong>Counters</strong>: packet count, byte count, duration &mdash; for monitoring and debugging</li>
+        </ul>
+        <p>
+          A typical multi-table pipeline (as used by OVN or OpenStack Neutron OVS agent):
+        </p>
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr><th>Table</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>0</td><td>Classify ingress: local vs. tunnel, tag with metadata/registers</td></tr>
+              <tr><td>1&ndash;10</td><td>Pre-ACL, ingress security group (conntrack zone assignment)</td></tr>
+              <tr><td>20&ndash;30</td><td>L2 lookup (MAC learning or programmed MACs), unknown unicast handling</td></tr>
+              <tr><td>40&ndash;50</td><td>L3 routing (if distributed routing is enabled)</td></tr>
+              <tr><td>60&ndash;70</td><td>Egress ACL / security groups</td></tr>
+              <tr><td>80+</td><td>Egress: select output port, VXLAN encap, physical NIC output</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- OVS Architecture SVG Diagram -->
+    <div class="diagram-container">
+      <h4>OVS Architecture &amp; Packet Flow</h4>
+      <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Open vSwitch architecture diagram showing ovs-vswitchd, ovsdb-server, kernel datapath, and packet flow paths">
+        <defs>
+          <marker id="arrow-vn1" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#76b900"/>
+          </marker>
+          <marker id="arrow-vn2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#e0e0e0"/>
+          </marker>
+          <marker id="arrow-vn3" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#ff6e40"/>
+          </marker>
+        </defs>
+
+        <!-- Background regions -->
+        <rect x="10" y="10" width="880" height="180" rx="8" fill="#1a2332" stroke="#2a3a4e" stroke-width="1.5"/>
+        <text x="25" y="35" fill="#8899aa" font-size="12" font-family="monospace">USERSPACE</text>
+
+        <rect x="10" y="200" width="880" height="140" rx="8" fill="#1a1a2e" stroke="#2a2a4e" stroke-width="1.5"/>
+        <text x="25" y="225" fill="#8899aa" font-size="12" font-family="monospace">KERNEL</text>
+
+        <rect x="10" y="350" width="880" height="160" rx="8" fill="#0d1117" stroke="#21262d" stroke-width="1.5"/>
+        <text x="25" y="375" fill="#8899aa" font-size="12" font-family="monospace">HARDWARE / NIC</text>
+
+        <!-- ovsdb-server -->
+        <rect x="40" y="55" width="200" height="120" rx="6" fill="#0d2818" stroke="#76b900" stroke-width="2"/>
+        <text x="140" y="82" fill="#76b900" font-size="15" font-weight="bold" text-anchor="middle">ovsdb-server</text>
+        <text x="140" y="105" fill="#c0c0c0" font-size="11" text-anchor="middle">Configuration Database</text>
+        <text x="140" y="125" fill="#888" font-size="10" text-anchor="middle">OVSDB protocol (RFC 7047)</text>
+        <text x="140" y="145" fill="#888" font-size="10" text-anchor="middle">bridges, ports, QoS, mirrors</text>
+        <text x="140" y="162" fill="#888" font-size="10" text-anchor="middle">JSON-RPC over Unix socket</text>
+
+        <!-- ovs-vswitchd -->
+        <rect x="290" y="55" width="320" height="120" rx="6" fill="#1a1a0d" stroke="#ffab00" stroke-width="2"/>
+        <text x="450" y="82" fill="#ffab00" font-size="15" font-weight="bold" text-anchor="middle">ovs-vswitchd</text>
+        <text x="450" y="105" fill="#c0c0c0" font-size="11" text-anchor="middle">Main Forwarding Daemon</text>
+        <text x="370" y="128" fill="#888" font-size="10" text-anchor="middle">OpenFlow pipeline</text>
+        <text x="530" y="128" fill="#888" font-size="10" text-anchor="middle">Flow classification</text>
+        <text x="370" y="148" fill="#888" font-size="10" text-anchor="middle">Slow-path processing</text>
+        <text x="530" y="148" fill="#888" font-size="10" text-anchor="middle">upcall handling</text>
+        <text x="450" y="168" fill="#888" font-size="10" text-anchor="middle">Flow caching &amp; megaflows</text>
+
+        <!-- SDN Controller -->
+        <rect x="660" y="55" width="210" height="120" rx="6" fill="#1a0d2e" stroke="#9c27b0" stroke-width="2"/>
+        <text x="765" y="82" fill="#9c27b0" font-size="15" font-weight="bold" text-anchor="middle">SDN Controller</text>
+        <text x="765" y="105" fill="#c0c0c0" font-size="11" text-anchor="middle">OpenFlow / OVSDB Manager</text>
+        <text x="765" y="128" fill="#888" font-size="10" text-anchor="middle">e.g., OVN, OpenDaylight,</text>
+        <text x="765" y="148" fill="#888" font-size="10" text-anchor="middle">Ryu, ONOS, Floodlight</text>
+        <text x="765" y="165" fill="#888" font-size="10" text-anchor="middle">Programs flows remotely</text>
+
+        <!-- Arrows: ovsdb ↔ vswitchd -->
+        <line x1="240" y1="115" x2="290" y2="115" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-vn1)"/>
+        <text x="265" y="108" fill="#76b900" font-size="9" text-anchor="middle">config</text>
+
+        <!-- Arrows: controller → vswitchd -->
+        <line x1="660" y1="115" x2="610" y2="115" stroke="#9c27b0" stroke-width="2" marker-end="url(#arrow-vn3)"/>
+        <text x="635" y="108" fill="#9c27b0" font-size="9" text-anchor="middle">OpenFlow</text>
+
+        <!-- CLI tools -->
+        <text x="140" y="48" fill="#4fc3f7" font-size="11" text-anchor="middle" font-family="monospace">ovs-vsctl</text>
+        <line x1="140" y1="50" x2="140" y2="55" stroke="#4fc3f7" stroke-width="1.5" marker-end="url(#arrow-vn2)"/>
+        <text x="380" y="48" fill="#4fc3f7" font-size="11" text-anchor="middle" font-family="monospace">ovs-ofctl</text>
+        <line x1="380" y1="50" x2="380" y2="55" stroke="#4fc3f7" stroke-width="1.5"/>
+        <text x="520" y="48" fill="#4fc3f7" font-size="11" text-anchor="middle" font-family="monospace">ovs-appctl</text>
+        <line x1="520" y1="50" x2="520" y2="55" stroke="#4fc3f7" stroke-width="1.5"/>
+
+        <!-- Kernel Datapath -->
+        <rect x="120" y="235" width="350" height="85" rx="6" fill="#0d0d1f" stroke="#448aff" stroke-width="2"/>
+        <text x="295" y="262" fill="#448aff" font-size="14" font-weight="bold" text-anchor="middle">Kernel Datapath (openvswitch.ko)</text>
+        <text x="295" y="285" fill="#c0c0c0" font-size="11" text-anchor="middle">Exact-match flow cache (hash table)</text>
+        <text x="295" y="305" fill="#888" font-size="10" text-anchor="middle">Actions: output, set, push/pop VLAN, encap/decap, CT</text>
+
+        <!-- DPDK Datapath -->
+        <rect x="520" y="235" width="350" height="85" rx="6" fill="#1f0d0d" stroke="#ff6e40" stroke-width="2"/>
+        <text x="695" y="262" fill="#ff6e40" font-size="14" font-weight="bold" text-anchor="middle">Userspace Datapath (DPDK)</text>
+        <text x="695" y="285" fill="#c0c0c0" font-size="11" text-anchor="middle">PMD threads &middot; Hugepages &middot; Kernel bypass</text>
+        <text x="695" y="305" fill="#888" font-size="10" text-anchor="middle">10&ndash;100x faster &middot; Deterministic latency</text>
+
+        <!-- vswitchd → kernel datapath -->
+        <line x1="400" y1="175" x2="295" y2="235" stroke="#448aff" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-vn2)"/>
+        <text x="330" y="200" fill="#448aff" font-size="9">Netlink</text>
+
+        <!-- vswitchd → DPDK datapath -->
+        <line x1="500" y1="175" x2="695" y2="235" stroke="#ff6e40" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-vn3)"/>
+        <text x="610" y="200" fill="#ff6e40" font-size="9">DPDK rings</text>
+
+        <!-- NIC -->
+        <rect x="250" y="390" width="400" height="100" rx="6" fill="#111820" stroke="#e0e0e0" stroke-width="2"/>
+        <text x="450" y="420" fill="#e0e0e0" font-size="15" font-weight="bold" text-anchor="middle">Physical NIC / SmartNIC (BlueField DPU)</text>
+        <text x="450" y="445" fill="#888" font-size="11" text-anchor="middle">ConnectX-7 &middot; 100/200/400 GbE &middot; RoCE / InfiniBand</text>
+        <text x="450" y="467" fill="#888" font-size="10" text-anchor="middle">TC flower offload &middot; ASAP&sup2; &middot; SR-IOV VFs &middot; eSwitch</text>
+
+        <!-- Kernel → NIC -->
+        <line x1="295" y1="320" x2="370" y2="390" stroke="#448aff" stroke-width="2" marker-end="url(#arrow-vn2)"/>
+        <text x="310" y="360" fill="#448aff" font-size="9">sk_buff / XDP</text>
+
+        <!-- DPDK → NIC -->
+        <line x1="695" y1="320" x2="560" y2="390" stroke="#ff6e40" stroke-width="2" marker-end="url(#arrow-vn3)"/>
+        <text x="650" y="360" fill="#ff6e40" font-size="9">DMA / mmap</text>
+
+        <!-- VM tap ports on left -->
+        <rect x="30" y="250" width="70" height="55" rx="4" fill="#1a2332" stroke="#4fc3f7" stroke-width="1.5"/>
+        <text x="65" y="275" fill="#4fc3f7" font-size="11" text-anchor="middle">VM1</text>
+        <text x="65" y="292" fill="#888" font-size="9" text-anchor="middle">tap0</text>
+        <line x1="100" y1="278" x2="120" y2="278" stroke="#4fc3f7" stroke-width="1.5" marker-end="url(#arrow-vn2)"/>
+
+        <!-- Legend -->
+        <rect x="30" y="390" width="190" height="95" rx="4" fill="#111820" stroke="#21262d" stroke-width="1"/>
+        <text x="45" y="410" fill="#aaa" font-size="11" font-weight="bold">Legend</text>
+        <line x1="45" y1="425" x2="75" y2="425" stroke="#448aff" stroke-width="2"/>
+        <text x="82" y="429" fill="#888" font-size="10">Kernel fast path</text>
+        <line x1="45" y1="445" x2="75" y2="445" stroke="#ff6e40" stroke-width="2"/>
+        <text x="82" y="449" fill="#888" font-size="10">DPDK fast path</text>
+        <line x1="45" y1="465" x2="75" y2="465" stroke="#9c27b0" stroke-width="2"/>
+        <text x="82" y="469" fill="#888" font-size="10">Control plane (OpenFlow)</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 2. OVS Commands and Configuration                            -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="ovs-commands">
+    <h3>2. OVS Commands &amp; Configuration</h3>
+
+    <p>
+      OVS provides several CLI tools, each targeting a different component.
+      <code>ovs-vsctl</code> manipulates the OVSDB configuration (bridges, ports, interfaces).
+      <code>ovs-ofctl</code> programs OpenFlow rules directly on a bridge.
+      <code>ovs-appctl</code> sends runtime commands to the <code>ovs-vswitchd</code> daemon.
+      <code>ovs-dpctl</code> inspects and manages the kernel datapath.
+    </p>
+
+    <h4>Bridge &amp; Port Management</h4>
+    <pre><code class="language-bash"># Create a bridge
+ovs-vsctl add-br br-int
+
+# List all bridges
+ovs-vsctl list-br
+
+# Add a physical NIC as a port (system type, default)
+ovs-vsctl add-port br-int eth0
+
+# Add an internal port (creates a Linux netdev for host IP assignment)
+ovs-vsctl add-port br-int mgmt0 -- set interface mgmt0 type=internal
+ip addr add 10.0.0.1/24 dev mgmt0
+ip link set mgmt0 up
+
+# Add a VLAN access port
+ovs-vsctl add-port br-int eth1 tag=100
+
+# Add a VLAN trunk port allowing VLANs 100, 200, 300
+ovs-vsctl add-port br-int eth2 trunks=100,200,300
+
+# Create patch ports connecting br-int ↔ br-ex
+ovs-vsctl add-port br-int patch-to-ex -- set interface patch-to-ex type=patch options:peer=patch-to-int
+ovs-vsctl add-port br-ex patch-to-int -- set interface patch-to-int type=patch options:peer=patch-to-ex
+
+# Show full bridge/port/interface hierarchy
+ovs-vsctl show</code></pre>
+
+    <h4>VXLAN Tunnel Configuration</h4>
+    <pre><code class="language-bash"># Add a VXLAN tunnel port with a fixed VNI (key)
+ovs-vsctl add-port br-int vxlan0 \
+  -- set interface vxlan0 type=vxlan \
+     options:remote_ip=10.0.0.2 \
+     options:key=1000
+
+# Add a VXLAN tunnel with flow-based VNI (key set per-flow)
+ovs-vsctl add-port br-int vxlan-flow \
+  -- set interface vxlan-flow type=vxlan \
+     options:remote_ip=flow \
+     options:key=flow
+
+# Geneve tunnel (OVN default, supports TLV metadata)
+ovs-vsctl add-port br-int geneve0 \
+  -- set interface geneve0 type=geneve \
+     options:remote_ip=10.0.0.2 \
+     options:key=5000</code></pre>
+
+    <h4>OpenFlow Rule Management</h4>
+    <pre><code class="language-bash"># Dump all flows on br-int (with stats)
+ovs-ofctl dump-flows br-int
+
+# Dump flows for a specific table
+ovs-ofctl dump-flows br-int table=20
+
+# Add a basic L3 forwarding rule
+# Match: packets on port 1, IPv4, destination 10.0.1.0/24
+# Action: output on port 2
+ovs-ofctl add-flow br-int \
+  "table=0,priority=100,in_port=1,dl_type=0x0800,nw_dst=10.0.1.0/24,actions=output:2"
+
+# Add a rule to encapsulate in VXLAN (set tunnel ID, output to tunnel port)
+ovs-ofctl add-flow br-int \
+  "table=0,priority=90,in_port=1,dl_type=0x0800,actions=set_field:1000->tun_id,output:10"
+
+# Drop broadcast on a specific port
+ovs-ofctl add-flow br-int \
+  "table=0,priority=200,in_port=3,dl_dst=ff:ff:ff:ff:ff:ff,actions=drop"
+
+# Stateful firewall with conntrack (allow established, track new)
+ovs-ofctl add-flow br-int \
+  "table=0,priority=100,ct_state=-trk,actions=ct(table=1)"
+ovs-ofctl add-flow br-int \
+  "table=1,priority=100,ct_state=+trk+est,actions=output:NORMAL"
+ovs-ofctl add-flow br-int \
+  "table=1,priority=50,ct_state=+trk+new,ip,nw_dst=10.0.1.0/24,actions=ct(commit),output:2"
+
+# Delete a specific flow
+ovs-ofctl del-flows br-int "in_port=1,dl_type=0x0800,nw_dst=10.0.1.0/24"
+
+# Delete all flows on the bridge (caution!)
+ovs-ofctl del-flows br-int</code></pre>
+
+    <h4>Port Mirroring</h4>
+    <pre><code class="language-bash"># Mirror all traffic on br-int to a specific port for packet capture
+ovs-vsctl -- set Bridge br-int mirrors=@m \
+  -- --id=@m create Mirror name=mirror0 \
+     select-all=true \
+     output-port=@p \
+  -- --id=@p get Port mirror-port
+
+# Mirror only traffic from a specific port
+ovs-vsctl -- set Bridge br-int mirrors=@m \
+  -- --id=@m create Mirror name=mirror-vm1 \
+     select-src-port=@s \
+     select-dst-port=@s \
+     output-port=@d \
+  -- --id=@s get Port tap-vm1 \
+  -- --id=@d get Port monitor0
+
+# Remove a mirror
+ovs-vsctl clear Bridge br-int mirrors</code></pre>
+
+    <h4>Debugging &amp; Inspection</h4>
+    <pre><code class="language-bash"># Show datapath flows (kernel-cached fast path entries)
+ovs-dpctl dump-flows
+
+# Trace a packet through the OpenFlow pipeline (invaluable for debugging)
+ovs-appctl ofproto/trace br-int \
+  in_port=1,dl_src=00:11:22:33:44:55,dl_dst=00:66:77:88:99:aa,dl_type=0x0800,\
+  nw_src=10.0.0.1,nw_dst=10.0.1.1,nw_proto=6,tp_src=12345,tp_dst=80
+
+# Show OpenFlow port statistics
+ovs-ofctl dump-ports br-int
+
+# Display interface statistics and errors
+ovs-vsctl list interface eth0
+
+# Check OVS version
+ovs-vsctl --version
+
+# Show OVS daemon logs
+journalctl -u ovs-vswitchd --no-pager -n 50</code></pre>
+
+    <div class="callout callout-tip">
+      <strong>Pro Tip: ofproto/trace</strong>
+      The <code>ovs-appctl ofproto/trace</code> command is the single most powerful
+      debugging tool in OVS. It simulates a packet traversal through the full OpenFlow
+      pipeline without injecting real traffic, showing every table hit, every resubmit,
+      and the final action list. Use it before deploying flow changes in production.
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 3. VXLAN (Virtual Extensible LAN)                            -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="vxlan">
+    <h3>3. VXLAN (Virtual Extensible LAN)</h3>
+
+    <p>
+      VXLAN (RFC 7348) is the dominant overlay encapsulation protocol in modern datacenters.
+      It solves the fundamental VLAN scalability problem: 802.1Q provides only a 12-bit VLAN
+      ID field (4,094 usable VLANs), which is wholly inadequate for multi-tenant cloud
+      environments. VXLAN provides a 24-bit VNI (VXLAN Network Identifier), supporting over
+      16 million logical network segments.
+    </p>
+
+    <h4>Why VXLAN?</h4>
+    <ul>
+      <li><strong>Scale</strong>: 16,777,216 (2<sup>24</sup>) segments vs. 4,094 VLANs</li>
+      <li><strong>L2 over L3</strong>: Extend Layer 2 domains across routed Layer 3 boundaries without spanning tree</li>
+      <li><strong>Workload mobility</strong>: VMs/containers can migrate across L3 boundaries while retaining their MAC and IP addresses</li>
+      <li><strong>Decoupled from physical topology</strong>: Overlay topology is independent of underlay &mdash; no recabling, no VLAN provisioning on every switch</li>
+      <li><strong>ECMP-friendly</strong>: UDP encapsulation provides entropy in the source port for equal-cost multi-path load balancing across the underlay fabric</li>
+    </ul>
+
+    <h4>VXLAN Encapsulation Format</h4>
+    <p>
+      An original L2 frame is encapsulated inside a UDP packet destined to port 4789.
+      This adds 50 bytes of overhead (14 outer Ethernet + 20 outer IP + 8 UDP + 8 VXLAN).
+    </p>
+
+    <!-- VXLAN Encapsulation SVG -->
+    <div class="diagram-container">
+      <h4>VXLAN Packet Encapsulation</h4>
+      <svg viewBox="0 0 920 370" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VXLAN encapsulation diagram showing the full packet with each header layer labeled and byte sizes">
+
+        <!-- Title -->
+        <text x="460" y="30" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">VXLAN Encapsulated Packet Structure</text>
+
+        <!-- Original Frame (innermost) -->
+        <text x="460" y="65" fill="#76b900" font-size="13" font-weight="bold" text-anchor="middle">Original L2 Frame (Inner Payload)</text>
+
+        <rect x="80" y="78" width="130" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
+        <text x="145" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner Dst MAC</text>
+        <text x="145" y="116" fill="#888" font-size="10" text-anchor="middle">6 bytes</text>
+
+        <rect x="215" y="78" width="130" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
+        <text x="280" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner Src MAC</text>
+        <text x="280" y="116" fill="#888" font-size="10" text-anchor="middle">6 bytes</text>
+
+        <rect x="350" y="78" width="100" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
+        <text x="400" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">EtherType</text>
+        <text x="400" y="116" fill="#888" font-size="10" text-anchor="middle">2 bytes</text>
+
+        <rect x="455" y="78" width="180" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
+        <text x="545" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner IP Header</text>
+        <text x="545" y="116" fill="#888" font-size="10" text-anchor="middle">20 bytes (IPv4)</text>
+
+        <rect x="640" y="78" width="200" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
+        <text x="740" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner Payload (TCP/UDP + Data)</text>
+        <text x="740" y="116" fill="#888" font-size="10" text-anchor="middle">variable</text>
+
+        <!-- VXLAN Header -->
+        <text x="460" y="155" fill="#ffab00" font-size="13" font-weight="bold" text-anchor="middle">VXLAN Header (8 bytes)</text>
+
+        <rect x="130" y="168" width="200" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
+        <text x="230" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">Flags (8 bits)</text>
+        <text x="230" y="206" fill="#888" font-size="10" text-anchor="middle">I flag = 1 (VNI valid)</text>
+
+        <rect x="335" y="168" width="120" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
+        <text x="395" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">Reserved</text>
+        <text x="395" y="206" fill="#888" font-size="10" text-anchor="middle">24 bits</text>
+
+        <rect x="460" y="168" width="200" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
+        <text x="560" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">VNI (24 bits)</text>
+        <text x="560" y="206" fill="#888" font-size="10" text-anchor="middle">0 &ndash; 16,777,215</text>
+
+        <rect x="665" y="168" width="120" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
+        <text x="725" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">Reserved</text>
+        <text x="725" y="206" fill="#888" font-size="10" text-anchor="middle">8 bits</text>
+
+        <!-- UDP Header -->
+        <text x="460" y="244" fill="#448aff" font-size="13" font-weight="bold" text-anchor="middle">Outer UDP Header (8 bytes)</text>
+
+        <rect x="130" y="256" width="200" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
+        <text x="230" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Src Port (entropy)</text>
+
+        <rect x="335" y="256" width="200" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
+        <text x="435" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Dst Port: 4789</text>
+
+        <rect x="540" y="256" width="120" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
+        <text x="600" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Length</text>
+
+        <rect x="665" y="256" width="120" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
+        <text x="725" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Checksum</text>
+
+        <!-- Outer IP Header -->
+        <text x="300" y="325" fill="#e040fb" font-size="13" font-weight="bold" text-anchor="middle">Outer IP Header (20 bytes)</text>
+        <rect x="130" y="335" width="340" height="30" rx="4" fill="#1a0d26" stroke="#e040fb" stroke-width="2"/>
+        <text x="300" y="356" fill="#e040fb" font-size="11" text-anchor="middle">Src: VTEP IP (local) &nbsp;&nbsp;|&nbsp;&nbsp; Dst: VTEP IP (remote) &nbsp;&nbsp;|&nbsp;&nbsp; Proto: UDP (17)</text>
+
+        <!-- Outer Ethernet -->
+        <text x="660" y="325" fill="#ff6e40" font-size="13" font-weight="bold" text-anchor="middle">Outer Ethernet (14 bytes)</text>
+        <rect x="500" y="335" width="320" height="30" rx="4" fill="#1f0d0d" stroke="#ff6e40" stroke-width="2"/>
+        <text x="660" y="356" fill="#ff6e40" font-size="11" text-anchor="middle">Outer Dst MAC &nbsp;|&nbsp; Outer Src MAC &nbsp;|&nbsp; EtherType 0x0800</text>
+
+        <!-- Overhead annotation -->
+        <rect x="10" y="248" width="110" height="55" rx="4" fill="#2a0a0a" stroke="#ff5252" stroke-width="1.5"/>
+        <text x="65" y="268" fill="#ff5252" font-size="12" font-weight="bold" text-anchor="middle">+50 bytes</text>
+        <text x="65" y="285" fill="#ff5252" font-size="10" text-anchor="middle">overhead</text>
+        <text x="65" y="298" fill="#888" font-size="9" text-anchor="middle">14+20+8+8</text>
+      </svg>
+    </div>
+
+    <h4>Key VXLAN Components</h4>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>VNI</strong> (VXLAN Network Identifier)</td>
+            <td>24-bit segment ID carried in the VXLAN header. Identifies the Layer 2 broadcast domain. Each tenant/network gets a unique VNI. Range: 0&ndash;16,777,215.</td>
+          </tr>
+          <tr>
+            <td><strong>VTEP</strong> (VXLAN Tunnel Endpoint)</td>
+            <td>The entity that performs encapsulation and decapsulation. Can be a software switch (OVS on a hypervisor), a hardware switch (leaf/spine ToR), or a SmartNIC/DPU (BlueField). Each VTEP has at least one IP address on the underlay network used as the outer source/destination IP.</td>
+          </tr>
+          <tr>
+            <td><strong>Underlay Network</strong></td>
+            <td>The physical L3 routed fabric (typically a leaf-spine Clos topology). Must support the VXLAN MTU: original frame (1500) + 50 bytes overhead = 1550 minimum. In practice, jumbo frames (MTU 9000 or 9216) are configured on all underlay interfaces to avoid fragmentation.</td>
+          </tr>
+          <tr>
+            <td><strong>BUM Traffic</strong></td>
+            <td>Broadcast, Unknown unicast, Multicast. Three approaches: (1) Multicast groups &mdash; map VNI to an IP multicast group, flood via PIM/IGMP. (2) Ingress replication &mdash; VTEP unicast-copies to all remote VTEPs in the VNI. (3) EVPN &mdash; BGP advertises MAC/IP bindings, eliminating flood-and-learn entirely.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>MTU Considerations</h4>
+    <div class="callout callout-warning">
+      <strong>Critical: MTU Planning</strong>
+      VXLAN adds 50 bytes of encapsulation overhead. If your VMs use a standard 1500-byte
+      MTU, the underlay must support at least 1550-byte frames. However, best practice is
+      to configure the underlay fabric (all leaf/spine switch interfaces and host NICs) with
+      jumbo frames (MTU 9000 or 9216). This avoids fragmentation, allows inner jumbo frames
+      for storage traffic (NFS, iSCSI), and accommodates double-encapsulation scenarios
+      (e.g., VXLAN inside GRE). In NVIDIA SuperPOD deployments, the InfiniBand fabric
+      natively supports 4K MTU, and the Ethernet management/storage networks are set to
+      9000-byte MTU.
+    </div>
+
+    <h4>VXLAN + EVPN: BGP-Based Control Plane</h4>
+    <p>
+      While basic VXLAN uses flood-and-learn for MAC address discovery (similar to traditional
+      Ethernet switches), this is inefficient at scale. EVPN (Ethernet VPN, RFC 7432 / RFC 8365)
+      provides a BGP-based control plane that distributes MAC and IP reachability information
+      across all VTEPs, eliminating the need for data-plane flooding.
+    </p>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">EVPN Route Types</button>
+      <div class="expandable-content">
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Route Type</th>
+                <th>Name</th>
+                <th>Purpose</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Type-1</td>
+                <td>Ethernet Auto-Discovery</td>
+                <td>Multi-homing: advertise Ethernet Segment (ES) membership for fast convergence and split-horizon</td>
+              </tr>
+              <tr>
+                <td>Type-2</td>
+                <td>MAC/IP Advertisement</td>
+                <td>Advertise [MAC, IP, VNI, VTEP-IP] bindings. This is the core route type &mdash; replaces flood-and-learn. Supports both MAC-only and MAC+IP for ARP suppression.</td>
+              </tr>
+              <tr>
+                <td>Type-3</td>
+                <td>Inclusive Multicast Ethernet Tag</td>
+                <td>Establishes the ingress replication list for BUM traffic. Each VTEP advertises its interest in a VNI.</td>
+              </tr>
+              <tr>
+                <td>Type-4</td>
+                <td>Ethernet Segment</td>
+                <td>Designated Forwarder (DF) election for multi-homed Ethernet segments</td>
+              </tr>
+              <tr>
+                <td>Type-5</td>
+                <td>IP Prefix Route</td>
+                <td>Advertise IP prefixes (subnets) for inter-VXLAN routing. Enables symmetric IRB (Integrated Routing and Bridging) on leaf switches for efficient L3 forwarding.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          With EVPN Type-2 routes, when a VM comes up on VTEP-A, VTEP-A immediately advertises
+          the VM's MAC and IP via BGP to all other VTEPs. When VTEP-B receives a packet
+          destined for that MAC, it already knows the remote VTEP IP &mdash; no flooding required.
+          EVPN Type-5 routes extend this to L3: an entire subnet prefix can be advertised,
+          enabling distributed routing where each leaf switch performs local L3 forwarding.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 4. OVS with DPDK                                             -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="ovs-dpdk">
+    <h3>4. OVS with DPDK</h3>
+
+    <p>
+      The Data Plane Development Kit (DPDK) is a set of libraries and drivers for fast
+      packet processing that bypasses the Linux kernel networking stack entirely. Instead
+      of relying on interrupt-driven packet reception via <code>sk_buff</code> allocations,
+      DPDK maps NIC RX/TX queues directly into userspace memory and uses dedicated
+      poll-mode driver (PMD) threads that continuously spin on the queues, achieving
+      zero-copy, zero-interrupt packet processing.
+    </p>
+
+    <h4>Performance Comparison</h4>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>OVS Kernel Datapath</th>
+            <th>OVS-DPDK</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Throughput (64-byte packets)</td>
+            <td>~1&ndash;3 Mpps per core</td>
+            <td>~15&ndash;40 Mpps per core</td>
+          </tr>
+          <tr>
+            <td>Latency (p99)</td>
+            <td>20&ndash;100 &micro;s</td>
+            <td>5&ndash;15 &micro;s</td>
+          </tr>
+          <tr>
+            <td>Jitter</td>
+            <td>High (interrupt coalescing, scheduling)</td>
+            <td>Very low (busy-poll, no context switches)</td>
+          </tr>
+          <tr>
+            <td>CPU utilization</td>
+            <td>Low idle, spikes on load</td>
+            <td>100% on PMD cores (always polling)</td>
+          </tr>
+          <tr>
+            <td>Max line-rate (100 GbE)</td>
+            <td>Difficult at small packet sizes</td>
+            <td>Achievable with 2&ndash;4 PMD cores</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Requirements</h4>
+    <ul>
+      <li><strong>Hugepages</strong>: DPDK requires hugepage memory (2 MB or 1 GB pages) to avoid TLB misses. For a 100 GbE NIC with large flow tables, allocate 4&ndash;8 GB of 1 GB hugepages per NUMA node.</li>
+      <li><strong>CPU pinning</strong>: PMD threads must be pinned to dedicated CPU cores, isolated from the OS scheduler (<code>isolcpus</code> or <code>cset</code>). Place PMD cores on the same NUMA node as the NIC for optimal performance.</li>
+      <li><strong>IOMMU</strong>: Required for VFIO-based NIC binding (<code>vfio-pci</code> driver). Set <code>intel_iommu=on iommu=pt</code> or <code>amd_iommu=on iommu=pt</code> in kernel boot parameters.</li>
+      <li><strong>NIC driver binding</strong>: NICs must be unbound from the kernel driver and bound to a DPDK-compatible driver (<code>vfio-pci</code> or <code>uio_pci_generic</code>).</li>
+    </ul>
+
+    <h4>Configuration</h4>
+    <pre><code class="language-bash"># 1. Allocate hugepages (1 GB pages, 8 pages per NUMA node)
+echo 8 > /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages
+echo 8 > /sys/devices/system/node/node1/hugepages/hugepages-1048576kB/nr_hugepages
+mkdir -p /dev/hugepages
+mount -t hugetlbfs none /dev/hugepages
+
+# 2. Enable DPDK in OVS
+ovs-vsctl set Open_vSwitch . other_config:dpdk-init=true
+
+# 3. Allocate DPDK memory per NUMA socket (MB)
+ovs-vsctl set Open_vSwitch . other_config:dpdk-socket-mem="4096,4096"
+
+# 4. Set PMD CPU mask (cores 2,3 on NUMA 0; cores 10,11 on NUMA 1)
+# Binary: 0000110000001100 = 0x0C0C
+ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=0x0C0C
+
+# 5. Restart OVS to apply DPDK init
+systemctl restart openvswitch-switch
+
+# 6. Create a DPDK-backed bridge (datapath_type=netdev is required)
+ovs-vsctl add-br br-dpdk -- set bridge br-dpdk datapath_type=netdev
+
+# 7. Bind NIC to DPDK (using dpdk-devargs PCI address)
+# First unbind from kernel driver:
+dpdk-devbind.py --bind=vfio-pci 0000:03:00.0
+
+# Add as DPDK port:
+ovs-vsctl add-port br-dpdk dpdk-p0 \
+  -- set Interface dpdk-p0 type=dpdk \
+     options:dpdk-devargs=0000:03:00.0
+
+# 8. Add a vhost-user port for VM connectivity
+ovs-vsctl add-port br-dpdk vhost-vm1 \
+  -- set Interface vhost-vm1 type=dpdkvhostuserclient \
+     options:vhost-server-path=/var/run/openvswitch/vhost-vm1
+
+# 9. Set interface MTU (e.g., 9000 for jumbo frames)
+ovs-vsctl set Interface dpdk-p0 mtu_request=9000
+
+# 10. Configure RX/TX queues per PMD
+ovs-vsctl set Interface dpdk-p0 options:n_rxq=4
+ovs-vsctl set Interface dpdk-p0 options:n_txq=4</code></pre>
+
+    <div class="callout callout-info">
+      <strong>NUMA Affinity Matters</strong>
+      In a dual-socket server (common in DGX-class nodes), placing PMD threads on the same
+      NUMA node as the NIC's PCIe slot avoids cross-socket QPI/UPI traffic, which can add
+      100+ ns of latency per packet. Use <code>lstopo</code> or <code>lspci -vmms</code> to
+      determine the NIC's NUMA node, then pin PMD cores accordingly via
+      <code>pmd-cpu-mask</code>.
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 5. Virtual Network Topologies                                -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="virtual-topologies">
+    <h3>5. Virtual Network Topologies</h3>
+
+    <h4>Provider Networks (VLAN-based)</h4>
+    <p>
+      In a provider network model, VMs are connected directly to the physical network
+      using VLAN tagging. The hypervisor host's OVS bridge tags/untags traffic on the
+      appropriate VLAN, and the physical ToR switch carries the tagged frames upstream.
+      This model provides the best performance (no encapsulation overhead) and simplest
+      troubleshooting, but requires VLAN provisioning on every physical switch in the path.
+    </p>
+
+    <h4>Tenant / Overlay Networks (VXLAN/GRE)</h4>
+    <p>
+      Overlay networks provide full tenant isolation without any physical switch configuration.
+      Each tenant gets one or more VNIs. Traffic between VMs on the same VNI is encapsulated
+      in VXLAN and tunneled over the L3 underlay fabric. The physical switches see only
+      regular IP/UDP traffic between VTEP addresses &mdash; completely unaware of the overlay
+      topology.
+    </p>
+
+    <h4>Network Namespaces for Routing Isolation</h4>
+    <p>
+      Linux network namespaces (<code>ip netns</code>) provide complete routing table isolation.
+      Each namespace has its own interfaces, routing table, iptables rules, and ARP cache.
+      In OpenStack, each tenant router runs in its own namespace (qrouter-*), and each
+      DHCP agent runs in a namespace (qdhcp-*). Namespaces connect to OVS via veth pairs
+      or OVS internal ports.
+    </p>
+    <pre><code class="language-bash"># Create a network namespace for tenant routing
+ip netns add tenant-router-1
+
+# Create a veth pair and place one end in the namespace
+ip link add veth-host type veth peer name veth-ns
+ip link set veth-ns netns tenant-router-1
+
+# Configure the namespace side
+ip netns exec tenant-router-1 ip addr add 10.0.1.1/24 dev veth-ns
+ip netns exec tenant-router-1 ip link set veth-ns up
+ip netns exec tenant-router-1 ip link set lo up
+
+# Attach host side to OVS bridge
+ovs-vsctl add-port br-int veth-host
+ip link set veth-host up
+
+# Enable NAT in the namespace for external access
+ip netns exec tenant-router-1 iptables -t nat -A POSTROUTING \
+  -o veth-ext -j MASQUERADE</code></pre>
+
+    <h4>Typical VM-to-VM Packet Path (Cross-Host, VXLAN)</h4>
+
+    <!-- VM-to-VM Packet Path SVG -->
+    <div class="diagram-container">
+      <h4>VM-to-VM Packet Path Through OVS &amp; VXLAN Overlay</h4>
+      <svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VM-to-VM packet path through OVS bridges, VXLAN tunnel, across physical network">
+        <defs>
+          <marker id="arrow-pkt1" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#76b900"/>
+          </marker>
+          <marker id="arrow-pkt2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#448aff"/>
+          </marker>
+        </defs>
+
+        <!-- Host A -->
+        <rect x="20" y="15" width="430" height="380" rx="10" fill="#111820" stroke="#2a3a4e" stroke-width="2"/>
+        <text x="235" y="42" fill="#e0e0e0" font-size="14" font-weight="bold" text-anchor="middle">Compute Host A (10.100.0.1)</text>
+
+        <!-- VM A -->
+        <rect x="50" y="60" width="160" height="80" rx="6" fill="#0d2818" stroke="#76b900" stroke-width="2"/>
+        <text x="130" y="88" fill="#76b900" font-size="13" font-weight="bold" text-anchor="middle">VM-A</text>
+        <text x="130" y="108" fill="#888" font-size="10" text-anchor="middle">IP: 192.168.1.10</text>
+        <text x="130" y="123" fill="#888" font-size="10" text-anchor="middle">MAC: aa:bb:cc:00:00:01</text>
+
+        <!-- tap port -->
+        <rect x="100" y="150" width="60" height="25" rx="3" fill="#1a2332" stroke="#4fc3f7" stroke-width="1.5"/>
+        <text x="130" y="167" fill="#4fc3f7" font-size="10" text-anchor="middle">tap0</text>
+        <line x1="130" y1="140" x2="130" y2="150" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
+
+        <!-- br-int A -->
+        <rect x="40" y="190" width="200" height="70" rx="6" fill="#1a1a0d" stroke="#ffab00" stroke-width="2"/>
+        <text x="140" y="218" fill="#ffab00" font-size="13" font-weight="bold" text-anchor="middle">br-int</text>
+        <text x="140" y="238" fill="#888" font-size="10" text-anchor="middle">OpenFlow pipeline</text>
+        <text x="140" y="252" fill="#888" font-size="9" text-anchor="middle">VLAN tag &rarr; VNI mapping</text>
+        <line x1="130" y1="175" x2="130" y2="190" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
+
+        <!-- patch port A -->
+        <rect x="260" y="205" width="70" height="25" rx="3" fill="#1a2332" stroke="#e040fb" stroke-width="1.5"/>
+        <text x="295" y="222" fill="#e040fb" font-size="9" text-anchor="middle">patch</text>
+        <line x1="240" y1="220" x2="260" y2="220" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
+
+        <!-- br-tun A -->
+        <rect x="260" y="275" width="170" height="70" rx="6" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
+        <text x="345" y="303" fill="#448aff" font-size="13" font-weight="bold" text-anchor="middle">br-tun</text>
+        <text x="345" y="323" fill="#888" font-size="10" text-anchor="middle">VXLAN encap</text>
+        <text x="345" y="337" fill="#888" font-size="9" text-anchor="middle">VNI=1000, UDP:4789</text>
+        <line x1="295" y1="230" x2="295" y2="275" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
+
+        <!-- Physical NIC A -->
+        <rect x="280" y="365" width="140" height="25" rx="3" fill="#1a2332" stroke="#e0e0e0" stroke-width="1.5"/>
+        <text x="350" y="382" fill="#e0e0e0" font-size="10" text-anchor="middle">eth0 (100 GbE)</text>
+        <line x1="345" y1="345" x2="345" y2="365" stroke="#448aff" stroke-width="2" marker-end="url(#arrow-pkt2)"/>
+
+        <!-- Physical Network (center) -->
+        <rect x="300" y="420" width="360" height="80" rx="8" fill="#0d1117" stroke="#21262d" stroke-width="2"/>
+        <text x="480" y="448" fill="#e0e0e0" font-size="14" font-weight="bold" text-anchor="middle">Physical L3 Fabric (Leaf-Spine)</text>
+        <text x="480" y="468" fill="#888" font-size="11" text-anchor="middle">IP routed underlay &middot; ECMP &middot; MTU 9216</text>
+        <text x="480" y="485" fill="#448aff" font-size="10" text-anchor="middle">VXLAN-encapsulated packets (outer IP: 10.100.0.1 &rarr; 10.100.0.2)</text>
+        <line x1="370" y1="390" x2="400" y2="420" stroke="#448aff" stroke-width="2" marker-end="url(#arrow-pkt2)"/>
+
+        <!-- Host B -->
+        <rect x="510" y="15" width="430" height="380" rx="10" fill="#111820" stroke="#2a3a4e" stroke-width="2"/>
+        <text x="725" y="42" fill="#e0e0e0" font-size="14" font-weight="bold" text-anchor="middle">Compute Host B (10.100.0.2)</text>
+
+        <!-- VM B -->
+        <rect x="740" y="60" width="160" height="80" rx="6" fill="#0d2818" stroke="#76b900" stroke-width="2"/>
+        <text x="820" y="88" fill="#76b900" font-size="13" font-weight="bold" text-anchor="middle">VM-B</text>
+        <text x="820" y="108" fill="#888" font-size="10" text-anchor="middle">IP: 192.168.1.20</text>
+        <text x="820" y="123" fill="#888" font-size="10" text-anchor="middle">MAC: aa:bb:cc:00:00:02</text>
+
+        <!-- tap port B -->
+        <rect x="790" y="150" width="60" height="25" rx="3" fill="#1a2332" stroke="#4fc3f7" stroke-width="1.5"/>
+        <text x="820" y="167" fill="#4fc3f7" font-size="10" text-anchor="middle">tap1</text>
+        <line x1="820" y1="150" x2="820" y2="140" stroke="#76b900" stroke-width="2"/>
+
+        <!-- br-int B -->
+        <rect x="720" y="190" width="200" height="70" rx="6" fill="#1a1a0d" stroke="#ffab00" stroke-width="2"/>
+        <text x="820" y="218" fill="#ffab00" font-size="13" font-weight="bold" text-anchor="middle">br-int</text>
+        <text x="820" y="238" fill="#888" font-size="10" text-anchor="middle">OpenFlow pipeline</text>
+        <text x="820" y="252" fill="#888" font-size="9" text-anchor="middle">VNI &rarr; VLAN tag mapping</text>
+        <line x1="820" y1="190" x2="820" y2="175" stroke="#76b900" stroke-width="2"/>
+
+        <!-- patch port B -->
+        <rect x="630" y="205" width="70" height="25" rx="3" fill="#1a2332" stroke="#e040fb" stroke-width="1.5"/>
+        <text x="665" y="222" fill="#e040fb" font-size="9" text-anchor="middle">patch</text>
+        <line x1="720" y1="220" x2="700" y2="220" stroke="#76b900" stroke-width="2"/>
+
+        <!-- br-tun B -->
+        <rect x="540" y="275" width="170" height="70" rx="6" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
+        <text x="625" y="303" fill="#448aff" font-size="13" font-weight="bold" text-anchor="middle">br-tun</text>
+        <text x="625" y="323" fill="#888" font-size="10" text-anchor="middle">VXLAN decap</text>
+        <text x="625" y="337" fill="#888" font-size="9" text-anchor="middle">VNI=1000 &rarr; local VLAN</text>
+        <line x1="665" y1="275" x2="665" y2="230" stroke="#76b900" stroke-width="2"/>
+
+        <!-- Physical NIC B -->
+        <rect x="550" y="365" width="140" height="25" rx="3" fill="#1a2332" stroke="#e0e0e0" stroke-width="1.5"/>
+        <text x="620" y="382" fill="#e0e0e0" font-size="10" text-anchor="middle">eth0 (100 GbE)</text>
+        <line x1="615" y1="345" x2="615" y2="365" stroke="#448aff" stroke-width="2"/>
+
+        <!-- NIC B → underlay -->
+        <line x1="590" y1="390" x2="560" y2="420" stroke="#448aff" stroke-width="2"/>
+
+        <!-- Packet path annotation -->
+        <text x="50" y="520" fill="#76b900" font-size="11">Packet path: VM-A &rarr; tap0 &rarr; br-int (tag VLAN) &rarr; patch &rarr; br-tun (VXLAN encap, VNI=1000)</text>
+        <text x="50" y="540" fill="#448aff" font-size="11">&rarr; eth0 &rarr; Leaf-Spine fabric (L3 routed) &rarr; eth0 &rarr; br-tun (VXLAN decap) &rarr; patch &rarr; br-int (untag) &rarr; tap1 &rarr; VM-B</text>
+      </svg>
+    </div>
+
+    <h4>Security: iptables/nftables for Security Groups and NAT</h4>
+    <p>
+      In virtualized environments, security groups (per-port ACLs) are enforced at the
+      hypervisor level. Two primary implementation strategies exist:
+    </p>
+    <ul>
+      <li><strong>OVS conntrack (preferred)</strong>: Stateful firewall rules implemented directly
+        in OVS OpenFlow using the <code>ct()</code> action. Connection tracking is performed in
+        the kernel's Netfilter conntrack subsystem. This approach avoids the per-packet iptables
+        overhead and scales better with port count.</li>
+      <li><strong>iptables/nftables bridge</strong>: Legacy approach where traffic is diverted
+        through a Linux bridge with iptables rules before reaching OVS. Each security group rule
+        becomes an iptables chain entry. Functional but slower and harder to manage at scale.</li>
+    </ul>
+    <pre><code class="language-bash"># OVS conntrack-based security group example:
+
+# Table 0: Send all traffic to connection tracker
+ovs-ofctl add-flow br-int \
+  "table=0,priority=100,ip,actions=ct(table=1,zone=1)"
+
+# Table 1: Allow established/related connections
+ovs-ofctl add-flow br-int \
+  "table=1,priority=100,ct_state=+est+trk,actions=NORMAL"
+ovs-ofctl add-flow br-int \
+  "table=1,priority=100,ct_state=+rel+trk,actions=NORMAL"
+
+# Table 1: Allow new SSH connections to VM (port 22)
+ovs-ofctl add-flow br-int \
+  "table=1,priority=90,ct_state=+new+trk,tcp,nw_dst=192.168.1.10,tp_dst=22,actions=ct(commit,zone=1),NORMAL"
+
+# Table 1: Allow new ICMP (ping)
+ovs-ofctl add-flow br-int \
+  "table=1,priority=90,ct_state=+new+trk,icmp,actions=ct(commit,zone=1),NORMAL"
+
+# Table 1: Drop everything else
+ovs-ofctl add-flow br-int \
+  "table=1,priority=0,actions=drop"</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 6. Hardware Offload                                          -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="hardware-offload">
+    <h3>6. Hardware Offload with SmartNICs &amp; DPUs</h3>
+
+    <p>
+      Even with DPDK, OVS consumes host CPU cores for packet processing &mdash; cores that could
+      otherwise drive GPU computation, run ML frameworks, or handle storage I/O. Hardware offload
+      moves the OVS forwarding pipeline into the NIC/DPU silicon, achieving line-rate performance
+      (100/200/400 Gbps) while freeing all host CPU cores for application workloads.
+    </p>
+
+    <h4>NVIDIA BlueField DPU &amp; ASAP&sup2;</h4>
+    <p>
+      ASAP&sup2; (Accelerated Switching and Packet Processing) is NVIDIA's OVS hardware offload
+      technology for ConnectX and BlueField SmartNICs/DPUs. It works by offloading OVS datapath
+      flows to the NIC's embedded switch (eSwitch), which performs matching and actions entirely
+      in hardware.
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Software OVS (Kernel)</th>
+            <th>OVS-DPDK</th>
+            <th>OVS + ASAP&sup2; (BlueField)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Throughput (100 GbE)</td>
+            <td>10&ndash;40 Gbps</td>
+            <td>40&ndash;100 Gbps</td>
+            <td>100 Gbps line rate</td>
+          </tr>
+          <tr>
+            <td>Latency</td>
+            <td>20&ndash;100 &micro;s</td>
+            <td>5&ndash;15 &micro;s</td>
+            <td>&lt;5 &micro;s (hardware path)</td>
+          </tr>
+          <tr>
+            <td>CPU cores consumed</td>
+            <td>1&ndash;2 (interrupt context)</td>
+            <td>2&ndash;4 (dedicated PMD cores)</td>
+            <td>0 (fully offloaded)</td>
+          </tr>
+          <tr>
+            <td>Max concurrent flows</td>
+            <td>~1M (kernel memory)</td>
+            <td>~2M (hugepage memory)</td>
+            <td>4&ndash;16M (NIC TCAM/SRAM)</td>
+          </tr>
+          <tr>
+            <td>VXLAN encap/decap</td>
+            <td>Software</td>
+            <td>Software</td>
+            <td>Hardware (line rate)</td>
+          </tr>
+          <tr>
+            <td>Connection tracking</td>
+            <td>Kernel netfilter</td>
+            <td>Userspace (slower)</td>
+            <td>Hardware CT engine</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>TC Flower Offload</h4>
+    <p>
+      The Linux Traffic Control (TC) subsystem provides the framework for hardware offload.
+      When OVS installs a flow in the kernel datapath, the TC flower classifier translates
+      it into a hardware-compatible rule and programs it into the NIC's eSwitch via the
+      <code>switchdev</code> driver model. The flow lifecycle:
+    </p>
+    <ol>
+      <li><code>ovs-vswitchd</code> classifies a packet miss and installs an OVS kernel flow</li>
+      <li>The kernel OVS module translates the flow to a TC flower rule</li>
+      <li>The NIC driver (mlx5_core) receives the TC flower rule and programs it into the eSwitch hardware tables</li>
+      <li>Subsequent packets matching this flow are forwarded entirely in hardware &mdash; they never reach the host CPU</li>
+      <li>Flow statistics are read back from hardware counters for OVS accounting</li>
+    </ol>
+
+    <h4>Enabling Hardware Offload</h4>
+    <pre><code class="language-bash"># 1. Enable switchdev mode on the NIC (e.g., ConnectX-6 Dx / BlueField-3)
+devlink dev eswitch set pci/0000:03:00.0 mode switchdev
+
+# 2. Enable hardware offload in OVS
+ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
+
+# 3. Enable TC offload on the representor ports
+ethtool -K enp3s0f0 hw-tc-offload on
+ethtool -K enp3s0f0_0 hw-tc-offload on  # VF representor
+
+# 4. Restart OVS
+systemctl restart openvswitch-switch
+
+# 5. Create bridge and add representor ports
+ovs-vsctl add-br br-offload
+ovs-vsctl add-port br-offload enp3s0f0       # PF uplink representor
+ovs-vsctl add-port br-offload enp3s0f0_0     # VF 0 representor (VM port)
+ovs-vsctl add-port br-offload enp3s0f0_1     # VF 1 representor
+
+# 6. Verify offloaded flows
+ovs-appctl dpctl/dump-flows type=offloaded
+tc -s filter show dev enp3s0f0 ingress</code></pre>
+
+    <div class="callout callout-info">
+      <strong>BlueField DPU Architecture</strong>
+      In a BlueField-3 DPU deployment, the DPU's ARM cores run a full Linux OS with OVS.
+      The host sees only SR-IOV Virtual Functions (VFs) &mdash; the entire switching, security,
+      and encapsulation pipeline runs on the DPU hardware. This provides host isolation:
+      even a compromised host OS cannot bypass network security policies enforced by the DPU.
+      This is the foundation of NVIDIA's "infrastructure on a chip" model used in SuperPOD
+      deployments.
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- 7. Network Security in Virtualized Environment               -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="network-security-virtualized">
+    <h3>7. Network Security in Virtualized Environments</h3>
+
+    <h4>Security Groups: Per-Port Stateful Firewall</h4>
+    <p>
+      Security groups are the primary network access control mechanism in virtualized datacenters.
+      Each virtual port (VM NIC, container interface) has an associated set of ingress and
+      egress rules specifying allowed protocols, ports, and source/destination CIDR ranges. All
+      traffic not explicitly allowed is dropped (default-deny).
+    </p>
+
+    <h4>Connection Tracking (conntrack) in OVS</h4>
+    <p>
+      OVS implements stateful firewall functionality through integration with the kernel's
+      Netfilter connection tracking subsystem. The <code>ct()</code> OpenFlow action sends
+      packets through conntrack, which tracks connection state (NEW, ESTABLISHED, RELATED,
+      INVALID). This enables rules like "allow outbound traffic and automatically permit
+      return traffic" without explicitly programming return-path rules.
+    </p>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">Conntrack Zones and Packet Processing</button>
+      <div class="expandable-content">
+        <p>
+          Conntrack zones provide per-port isolation of connection tracking state. Each virtual
+          port is assigned a unique zone number, ensuring that connections from one VM cannot
+          interfere with the conntrack state of another VM &mdash; even if they share the same
+          5-tuple (src IP, dst IP, protocol, src port, dst port).
+        </p>
+        <pre><code class="language-bash"># Assign conntrack zone per port using OVS registers
+# Port 1 (VM-A) → zone 1; Port 2 (VM-B) → zone 2
+
+# Tag incoming traffic with zone based on ingress port
+ovs-ofctl add-flow br-int \
+  "table=0,priority=100,in_port=1,actions=load:1->NXM_NX_CT_ZONE[],resubmit(,1)"
+ovs-ofctl add-flow br-int \
+  "table=0,priority=100,in_port=2,actions=load:2->NXM_NX_CT_ZONE[],resubmit(,1)"
+
+# Send to conntrack in the assigned zone
+ovs-ofctl add-flow br-int \
+  "table=1,priority=100,ip,actions=ct(table=2,zone=NXM_NX_CT_ZONE[])"
+
+# Table 2: enforcement
+ovs-ofctl add-flow br-int \
+  "table=2,priority=100,ct_state=+est+trk,actions=NORMAL"
+ovs-ofctl add-flow br-int \
+  "table=2,priority=50,ct_state=+new+trk,tcp,tp_dst=80,actions=ct(commit),NORMAL"
+ovs-ofctl add-flow br-int \
+  "table=2,priority=0,actions=drop"</code></pre>
+      </div>
+    </div>
+
+    <h4>Microsegmentation</h4>
+    <p>
+      Microsegmentation implements fine-grained, per-workload security policies that restrict
+      lateral (east-west) traffic within the datacenter. Unlike traditional perimeter firewalls
+      that only inspect north-south traffic, microsegmentation policies are enforced at the
+      virtual switch level on every host. In a GPU cluster, this prevents a compromised
+      management VM from accessing the high-speed storage network or GPU interconnect
+      control plane.
+    </p>
+    <ul>
+      <li><strong>Identity-based policies</strong>: Rules based on workload labels/tags, not just IP addresses (e.g., "allow training-job pods to reach storage-server group on NFS port 2049")</li>
+      <li><strong>Zero-trust model</strong>: All east-west traffic is denied by default; each flow must be explicitly permitted</li>
+      <li><strong>Distributed enforcement</strong>: Policies are programmed as OVS flows on every hypervisor, ensuring enforcement even for intra-host VM-to-VM traffic</li>
+      <li><strong>Policy engines</strong>: NSX-T, Calico, Cilium, OVN ACLs, or custom OpenFlow pipelines</li>
+    </ul>
+
+    <h4>Network Policies (Kubernetes / Container Context)</h4>
+    <p>
+      In Kubernetes-based GPU clusters, NetworkPolicy resources define allowed ingress and
+      egress traffic for pods using label selectors. The CNI plugin (Calico, Cilium, OVN-Kubernetes)
+      translates these policies into datapath rules:
+    </p>
+    <pre><code class="language-bash"># Example: Kubernetes NetworkPolicy (YAML, applied via kubectl)
+# Allow only training pods to access the model-store service on port 8080
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-training-to-model-store
+  namespace: ml-workloads
+spec:
+  podSelector:
+    matchLabels:
+      app: model-store
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              role: training-job
+      ports:
+        - protocol: TCP
+          port: 8080</code></pre>
+
+    <div class="callout callout-warning">
+      <strong>Security in GPU Superpod Deployments</strong>
+      In NVIDIA DGX SuperPOD configurations, the network is segmented into distinct security
+      domains: (1) In-band management network for BMC/IPMI, (2) Out-of-band provisioning
+      network, (3) Storage network (NVMe-oF over RoCE), and (4) High-speed compute fabric
+      (InfiniBand for NCCL/GPU-Direct RDMA). Each domain uses separate VLANs or VNIs with
+      strict ACLs preventing cross-domain traffic. The BlueField DPU enforces these boundaries
+      in hardware, ensuring that even a compromised host cannot breach network segmentation.
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- Quiz Section                                                 -->
+  <!-- ============================================================ -->
+
+  <div class="info-card" id="virtual-networking-quiz">
+    <h3>Knowledge Check: Virtual Networking</h3>
+
+    <div class="quiz-container" id="quiz-vnet-1">
+      <div class="quiz-question">
+        <p><strong>Question 1:</strong> What is the maximum number of unique VXLAN segments (VNIs) supported, and why is this a significant improvement over 802.1Q VLANs?</p>
+        <div class="quiz-options">
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-1" value="a"/>
+            <span>65,536 segments (16-bit VNI). This is a 16x improvement over the 4,094 VLANs available in 802.1Q, which uses a 12-bit VLAN ID.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-1" value="b"/>
+            <span>16,777,216 segments (24-bit VNI). The 12-bit 802.1Q VLAN ID supports only 4,094 usable VLANs, which is insufficient for multi-tenant cloud environments. VXLAN's 24-bit VNI provides over 4,000x more network segments.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-1" value="c"/>
+            <span>4,294,967,296 segments (32-bit VNI). VXLAN uses a full 32-bit identifier in the VXLAN header, providing virtually unlimited network segments.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-1" value="d"/>
+            <span>1,048,576 segments (20-bit VNI). Similar to MPLS labels, VXLAN uses a 20-bit network identifier to stay compatible with existing router hardware.</span>
+          </label>
+        </div>
+        <div class="quiz-answer" data-correct="b">
+          <p><strong>Correct answer: B.</strong> VXLAN uses a 24-bit VNI field in its 8-byte header, providing 2<sup>24</sup> = 16,777,216 unique segments. 802.1Q VLANs use a 12-bit VLAN ID (with 0 and 4095 reserved), yielding only 4,094 usable segments. This ~4,000x increase is essential for multi-tenant cloud datacenters where each tenant may need dozens of isolated network segments.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="quiz-container" id="quiz-vnet-2">
+      <div class="quiz-question">
+        <p><strong>Question 2:</strong> In an OVS-DPDK deployment, what is the role of PMD (Poll Mode Driver) threads, and why do they consume 100% CPU even when idle?</p>
+        <div class="quiz-options">
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-2" value="a"/>
+            <span>PMD threads handle flow table compilation and optimization. They run at 100% CPU because they continuously recompile megaflow entries to maintain optimal forwarding performance.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-2" value="b"/>
+            <span>PMD threads are dedicated kernel threads that process hardware interrupts from the NIC. They consume 100% CPU because interrupt coalescing is disabled in DPDK mode to minimize latency.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-2" value="c"/>
+            <span>PMD threads continuously poll NIC RX queues for incoming packets in a tight loop (busy-wait), bypassing the kernel interrupt mechanism entirely. They show 100% CPU because they never sleep or yield &mdash; this eliminates interrupt overhead and context-switch latency, enabling deterministic sub-10 microsecond packet processing.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-2" value="d"/>
+            <span>PMD threads manage hugepage memory allocation and IOMMU mappings. They run at 100% CPU because they must continuously verify DMA memory mappings for security compliance.</span>
+          </label>
+        </div>
+        <div class="quiz-answer" data-correct="c">
+          <p><strong>Correct answer: C.</strong> DPDK Poll Mode Driver threads operate in a busy-wait loop, continuously polling NIC RX descriptor rings for new packets. Unlike the traditional interrupt-driven model (where the NIC triggers an IRQ, the kernel wakes the softirq handler, allocates an sk_buff, and passes it through the network stack), PMD threads read packets directly from memory-mapped DMA buffers with zero kernel involvement. This eliminates all interrupt, context-switch, and memory allocation overhead. The trade-off is that PMD cores show 100% utilization at all times, regardless of traffic load, because the polling loop never sleeps.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="quiz-container" id="quiz-vnet-3">
+      <div class="quiz-question">
+        <p><strong>Question 3:</strong> How does ASAP&sup2; hardware offload on a BlueField DPU differ from OVS-DPDK, and what is the primary advantage for GPU compute nodes?</p>
+        <div class="quiz-options">
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-3" value="a"/>
+            <span>ASAP&sup2; runs OVS in a container on the DPU's ARM cores, which provides better isolation but similar performance to OVS-DPDK on the host. The primary advantage is security, not performance.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-3" value="b"/>
+            <span>ASAP&sup2; offloads the entire OVS datapath (flow matching, actions, VXLAN encap/decap, connection tracking) into the NIC's embedded eSwitch hardware, achieving line-rate forwarding with zero host CPU consumption. For GPU compute nodes, this means all CPU cores and PCIe bandwidth are available for GPU workloads &mdash; no cores are wasted on PMD polling or packet processing.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-3" value="c"/>
+            <span>ASAP&sup2; is a faster version of DPDK that uses the DPU's ARM cores instead of host x86 cores for PMD polling. The advantage is that ARM cores are more power-efficient than x86 cores for polling operations.</span>
+          </label>
+          <label class="quiz-option">
+            <input type="radio" name="quiz-vnet-3" value="d"/>
+            <span>ASAP&sup2; compiles OVS flow rules into FPGA bitstreams that are loaded onto the BlueField DPU. The advantage is that FPGA-based forwarding provides more flexibility than fixed-function ASICs.</span>
+          </label>
+        </div>
+        <div class="quiz-answer" data-correct="b">
+          <p><strong>Correct answer: B.</strong> ASAP&sup2; (Accelerated Switching and Packet Processing) offloads OVS datapath flows from the host entirely into the ConnectX/BlueField NIC's embedded switch hardware (eSwitch). When OVS installs a kernel datapath flow, the TC flower classifier translates it into a hardware rule and programs it into the NIC's match-action tables (TCAM/SRAM). Subsequent packets matching that flow are forwarded at line rate (100/200/400 Gbps) in hardware, never touching the host CPU. Unlike OVS-DPDK, which dedicates 2&ndash;4 host CPU cores to PMD polling, ASAP&sup2; consumes zero host CPU cores. In GPU compute nodes where every CPU core and PCIe lane is valuable for feeding GPU workloads (data loading, preprocessing, NCCL coordination), freeing network processing from the host is a critical optimization.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</section>

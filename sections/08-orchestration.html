@@ -1,0 +1,1974 @@
+<section id="orchestration" class="content-section" data-layer="6">
+
+  <!-- ============================================================
+       SECTION HEADER
+       ============================================================ -->
+  <div class="section-header">
+    <span class="section-number">08</span>
+    <h2>Orchestration &amp; Cluster Management</h2>
+    <p class="section-subtitle">Kubernetes, GPU Operators, RDMA Networking, and Job Scheduling for GPU Superpods</p>
+  </div>
+
+  <!-- ============================================================
+       1. KUBERNETES FOR GPU CLUSTERS
+       ============================================================ -->
+  <div class="subsection" id="k8s-gpu-clusters">
+    <h3>1. Kubernetes for GPU Clusters</h3>
+
+    <div class="info-card">
+      <h4>Why Kubernetes for HPC / GPU Infrastructure?</h4>
+      <p>
+        Kubernetes has become the dominant orchestration platform for GPU clusters because it solves
+        three fundamental challenges at scale: <strong>scheduling</strong> (placing workloads on the
+        right hardware), <strong>scaling</strong> (elastically growing from 1 to 1,000+ nodes), and
+        <strong>multi-tenancy</strong> (isolating teams sharing expensive GPU resources). In a
+        Superpod environment with 32+ DGX nodes each containing 8 GPUs, manual placement of
+        distributed training jobs is impractical. Kubernetes automates this while respecting hardware
+        topology constraints critical for NCCL collective communication performance.
+      </p>
+      <p>
+        Unlike traditional HPC schedulers (Slurm, PBS), Kubernetes provides a declarative API, a
+        rich ecosystem of operators and controllers, container-native isolation, and seamless
+        integration with CI/CD pipelines. Many organizations run Kubernetes alongside Slurm,
+        using K8s for inference/serving and interactive workloads, and Slurm for batch training.
+        However, with the maturation of gang scheduling (Volcano, Kueue) and training operators
+        (Kubeflow), Kubernetes is increasingly used for large-scale training as well.
+      </p>
+    </div>
+
+    <h4>GPU-Aware Scheduling</h4>
+    <p>
+      At the core of GPU scheduling in Kubernetes is the <strong>Extended Resource</strong> mechanism.
+      GPUs are advertised by the NVIDIA Device Plugin as <code>nvidia.com/gpu</code> resources on each
+      node. Pods request GPUs in their resource spec, and the Kubernetes scheduler only places pods on
+      nodes with sufficient available GPUs. Unlike CPU and memory, GPU resources are <em>whole-number only</em>
+      and cannot be overcommitted &mdash; if a node has 8 GPUs and 8 are allocated, no more GPU pods
+      can be scheduled there.
+    </p>
+
+    <pre><code class="language-yaml"># Pod requesting all 8 GPUs on a DGX H100 node
+apiVersion: v1
+kind: Pod
+metadata:
+  name: training-worker-0
+  labels:
+    app: llm-training
+    role: worker
+spec:
+  containers:
+  - name: pytorch-trainer
+    image: nvcr.io/nvidia/pytorch:24.01-py3
+    resources:
+      requests:
+        cpu: "64"
+        memory: "512Gi"
+        nvidia.com/gpu: 8          # Request all 8 H100 GPUs
+      limits:
+        cpu: "128"
+        memory: "1024Gi"
+        nvidia.com/gpu: 8          # Limits must equal requests for GPUs
+    env:
+    - name: NCCL_DEBUG
+      value: "INFO"
+    - name: NCCL_IB_HCA
+      value: "mlx5"               # Use InfiniBand HCAs for NCCL
+    - name: NCCL_TOPO_DUMP_FILE
+      value: "/var/run/nvidia/topo.xml"
+    volumeMounts:
+    - name: shm
+      mountPath: /dev/shm
+  volumes:
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: "128Gi"           # Large shared memory for NCCL</code></pre>
+
+    <div class="callout callout-warning">
+      <h5>Topology-Aware Scheduling</h5>
+      <p>
+        For distributed training with NCCL, pod placement <em>matters enormously</em>. Two pods on
+        the same NVSwitch-connected DGX node communicate at 900 GB/s (NVLink). Two pods on different
+        nodes in the same leaf switch communicate at 400 Gb/s (InfiniBand). Two pods crossing spine
+        switches see higher latency and potential congestion. The scheduler must be topology-aware to
+        co-locate pods in the same rack or pod (network pod) whenever possible. This is achieved via
+        <strong>topology spread constraints</strong> and <strong>pod affinity</strong> rules, combined
+        with node labels that encode the physical topology (rack, row, network pod).
+      </p>
+    </div>
+
+    <h4>Node Labels and Taints for GPU Types</h4>
+    <p>
+      GPU Feature Discovery (GFD), a component of the NVIDIA GPU Operator, automatically labels nodes
+      with detailed GPU information. These labels enable precise scheduling decisions:
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Label Key</th>
+            <th>Example Value</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>nvidia.com/gpu.product</code></td>
+            <td><code>NVIDIA-H100-SXM5-80GB</code></td>
+            <td>GPU model identification for nodeSelector</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/gpu.count</code></td>
+            <td><code>8</code></td>
+            <td>Number of GPUs on the node</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/gpu.memory</code></td>
+            <td><code>81920</code></td>
+            <td>GPU memory in MiB per GPU</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/cuda.driver.major</code></td>
+            <td><code>535</code></td>
+            <td>CUDA driver major version</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/cuda.runtime.major</code></td>
+            <td><code>12</code></td>
+            <td>CUDA runtime major version</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/gpu.compute.major</code></td>
+            <td><code>9</code></td>
+            <td>Compute capability (9.0 for H100)</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/mig.capable</code></td>
+            <td><code>true</code></td>
+            <td>Whether the GPU supports MIG</td>
+          </tr>
+          <tr>
+            <td><code>nvidia.com/gpu.family</code></td>
+            <td><code>hopper</code></td>
+            <td>GPU architecture family</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code class="language-bash"># Apply taints to reserve GPU nodes for GPU workloads only
+kubectl taint nodes dgx-node-01 nvidia.com/gpu=present:NoSchedule
+
+# Only pods with the matching toleration can be scheduled on GPU nodes
+# This prevents CPU-only workloads from consuming GPU node resources
+
+# Label nodes with rack/topology information for topology-aware scheduling
+kubectl label nodes dgx-node-01 topology.kubernetes.io/rack=rack-01
+kubectl label nodes dgx-node-01 topology.kubernetes.io/zone=pod-a
+kubectl label nodes dgx-node-01 nvidia.com/gpu.product=NVIDIA-H100-SXM5-80GB</code></pre>
+
+    <h4>Pod Scheduling Strategies</h4>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> nodeSelector &amp; nodeAffinity
+      </button>
+      <div class="expandable-content">
+        <p>
+          <code>nodeSelector</code> is the simplest constraint &mdash; a map of key-value label pairs that
+          the target node must match. <code>nodeAffinity</code> provides richer expressions including
+          <code>In</code>, <code>NotIn</code>, <code>Exists</code>, <code>Gt</code>, <code>Lt</code> operators,
+          and supports both <em>required</em> (hard) and <em>preferred</em> (soft) rules.
+        </p>
+        <pre><code class="language-yaml">affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: nvidia.com/gpu.product
+          operator: In
+          values:
+          - "NVIDIA-H100-SXM5-80GB"
+          - "NVIDIA-H200-SXM-141GB"
+        - key: nvidia.com/gpu.count
+          operator: Gt
+          values:
+          - "4"                    # Nodes with more than 4 GPUs
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      preference:
+        matchExpressions:
+        - key: topology.kubernetes.io/rack
+          operator: In
+          values:
+          - "rack-01"              # Prefer rack-01 (soft)</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> podAffinity / podAntiAffinity
+      </button>
+      <div class="expandable-content">
+        <p>
+          Pod affinity co-locates pods relative to other pods. For distributed training, you want all
+          workers of the same job on nodes in the same rack (same <code>topologyKey</code>). Pod
+          anti-affinity spreads replicas across failure domains for high availability.
+        </p>
+        <pre><code class="language-yaml">affinity:
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+        - key: training-job
+          operator: In
+          values:
+          - "llm-gpt-run-042"
+      topologyKey: topology.kubernetes.io/rack  # Same rack
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 50
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app
+            operator: In
+            values:
+            - "inference-server"
+        topologyKey: kubernetes.io/hostname  # Different nodes</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> Topology Spread Constraints
+      </button>
+      <div class="expandable-content">
+        <p>
+          Topology spread constraints distribute pods evenly across topology domains. This is useful for
+          spreading inference replicas across racks for fault tolerance, or concentrating training workers
+          within a network pod for NCCL performance.
+        </p>
+        <pre><code class="language-yaml">topologySpreadConstraints:
+- maxSkew: 1                      # Max difference in pod count across domains
+  topologyKey: topology.kubernetes.io/rack
+  whenUnsatisfiable: DoNotSchedule  # Hard constraint
+  labelSelector:
+    matchLabels:
+      app: inference-triton
+- maxSkew: 2
+  topologyKey: topology.kubernetes.io/zone
+  whenUnsatisfiable: ScheduleAnyway  # Soft constraint (best-effort)
+  labelSelector:
+    matchLabels:
+      app: inference-triton</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       2. NVIDIA GPU OPERATOR
+       ============================================================ -->
+  <div class="subsection" id="gpu-operator">
+    <h3>2. NVIDIA GPU Operator</h3>
+
+    <div class="info-card">
+      <h4>Automating the GPU Software Stack</h4>
+      <p>
+        The NVIDIA GPU Operator uses the Kubernetes operator framework to automate the management of
+        all NVIDIA software components needed for GPU provisioning. Instead of manually installing
+        drivers, container toolkits, and device plugins on every node, the GPU Operator deploys
+        and manages these as containerized workloads via DaemonSets. When a new GPU node joins the
+        cluster, the operator automatically installs the full stack &mdash; from kernel-mode driver
+        to monitoring exporters &mdash; without any manual intervention. This is essential in
+        cloud-native environments where nodes are ephemeral and auto-scaled.
+      </p>
+    </div>
+
+    <h4>Components Deployed by the GPU Operator</h4>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>DaemonSet Name</th>
+            <th>Function</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>NVIDIA Driver</strong></td>
+            <td><code>nvidia-driver-daemonset</code></td>
+            <td>
+              Container-based driver installation. Compiles and loads the kernel module
+              (<code>nvidia.ko</code>, <code>nvidia-uvm.ko</code>, <code>nvidia-modeset.ko</code>)
+              on the host. Supports pre-compiled drivers for specific kernel versions to avoid
+              compilation overhead. Version is pinned in ClusterPolicy (e.g., <code>535.129.03</code>).
+            </td>
+          </tr>
+          <tr>
+            <td><strong>NVIDIA Container Toolkit</strong></td>
+            <td><code>nvidia-container-toolkit-daemonset</code></td>
+            <td>
+              Formerly nvidia-docker2. Installs the <code>nvidia-container-runtime</code> and
+              <code>nvidia-container-cli</code> on the host. Configures containerd to use the
+              NVIDIA runtime as a handler for GPU containers. Handles injecting GPU device nodes
+              (<code>/dev/nvidia*</code>) and driver libraries into containers.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>NVIDIA Device Plugin</strong></td>
+            <td><code>nvidia-device-plugin-daemonset</code></td>
+            <td>
+              Implements the Kubernetes Device Plugin API. Discovers GPUs on the node and
+              advertises them to the kubelet as <code>nvidia.com/gpu</code> extended resources.
+              Handles GPU allocation, health checking, and device topology reporting. Supports
+              time-slicing for GPU sharing and MIG device advertisement.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>DCGM Exporter</strong></td>
+            <td><code>nvidia-dcgm-exporter</code></td>
+            <td>
+              Exports GPU metrics via the NVIDIA Data Center GPU Manager (DCGM) in Prometheus
+              format. Metrics include GPU utilization, memory usage, temperature, power draw,
+              ECC errors, NVLink throughput, PCIe throughput, and SM clock frequencies. Default
+              scrape endpoint: <code>:9400/metrics</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>GPU Feature Discovery</strong></td>
+            <td><code>nvidia-gpu-feature-discovery</code></td>
+            <td>
+              Labels nodes with GPU properties (product name, driver version, CUDA version,
+              compute capability, MIG capability, GPU family). These labels power
+              <code>nodeSelector</code> and <code>nodeAffinity</code> scheduling decisions.
+              Re-labels periodically to detect hardware changes.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>MIG Manager</strong></td>
+            <td><code>nvidia-mig-manager</code></td>
+            <td>
+              Manages Multi-Instance GPU (MIG) partitioning on A100/H100 GPUs. Applies MIG
+              profiles declaratively via ConfigMaps. Can reconfigure MIG partitions by draining
+              pods, applying the new profile, and uncordoning the node. Supports per-node MIG
+              configurations.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>DCGM (standalone)</strong></td>
+            <td><code>nvidia-dcgm</code></td>
+            <td>
+              Runs the DCGM daemon for deep GPU health monitoring, diagnostics, and policy-based
+              management. Provides GPU health watches, job statistics, and active health checks
+              (memory stress tests, PCIe bandwidth tests). Used by DCGM Exporter as a data source.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Node Status Exporter</strong></td>
+            <td><code>nvidia-operator-validator</code></td>
+            <td>
+              Validates that all GPU operator components are functioning correctly. Runs
+              post-install validation (can the container see GPUs? Are drivers loaded?). Reports
+              node readiness status back to the operator.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>ClusterPolicy CRD</h4>
+    <p>
+      The GPU Operator is configured through a single <code>ClusterPolicy</code> Custom Resource.
+      This CRD defines the desired state of every component &mdash; image versions, runtime configs,
+      feature flags, and node selectors:
+    </p>
+
+    <pre><code class="language-yaml">apiVersion: nvidia.com/v1
+kind: ClusterPolicy
+metadata:
+  name: cluster-policy
+spec:
+  operator:
+    defaultRuntime: containerd
+    initContainer:
+      image: nvcr.io/nvidia/cuda
+      version: "12.3.1-base-ubi8"
+
+  driver:
+    enabled: true
+    version: "535.129.03"
+    repository: nvcr.io/nvidia
+    image: driver
+    rdma:
+      enabled: true                 # Enable GPUDirect RDMA kernel module
+      useHostMofed: true            # Use host-installed MLNX_OFED
+    licensingConfig:
+      nlsEnabled: false
+    upgradePolicy:
+      autoUpgrade: true
+      maxParallelUpgrades: 1        # Rolling driver upgrades
+      drain:
+        enabled: true
+        force: true
+        timeoutSeconds: 300
+
+  toolkit:
+    enabled: true
+    version: "v1.14.3-ubuntu20.04"
+
+  devicePlugin:
+    enabled: true
+    version: "v0.14.3"
+    config:
+      name: device-plugin-config
+      default: "all-gpus"           # Default config map entry
+
+  dcgmExporter:
+    enabled: true
+    version: "3.3.0-3.2.0-ubuntu22.04"
+    config:
+      name: "dcgm-metrics-config"   # Custom metrics config map
+
+  dcgm:
+    enabled: true
+    version: "3.3.0-1-ubuntu22.04"
+
+  gfd:
+    enabled: true
+    version: "v0.8.2"
+
+  migManager:
+    enabled: true
+    version: "v0.6.0"
+    config:
+      name: mig-config               # MIG partitioning profiles
+
+  nodeStatusExporter:
+    enabled: true
+
+  sandboxDevicePlugin:
+    enabled: false                    # For vGPU environments</code></pre>
+
+    <h4>Installation via Helm</h4>
+    <pre><code class="language-bash"># Add the NVIDIA Helm repository
+helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+helm repo update
+
+# Install the GPU Operator
+helm install gpu-operator nvidia/gpu-operator \
+  --namespace gpu-operator \
+  --create-namespace \
+  --version v23.9.1 \
+  --set driver.version=535.129.03 \
+  --set driver.rdma.enabled=true \
+  --set driver.rdma.useHostMofed=true \
+  --set toolkit.version=v1.14.3-ubuntu20.04 \
+  --set devicePlugin.config.name=device-plugin-config \
+  --set dcgmExporter.config.name=dcgm-metrics-config \
+  --set migManager.enabled=true
+
+# Verify operator pods are running
+kubectl -n gpu-operator get pods
+# NAME                                                  READY   STATUS
+# gpu-operator-xxxxx                                    1/1     Running
+# nvidia-container-toolkit-daemonset-xxxxx              1/1     Running
+# nvidia-cuda-validator-xxxxx                           0/1     Completed
+# nvidia-dcgm-exporter-xxxxx                            1/1     Running
+# nvidia-device-plugin-daemonset-xxxxx                  1/1     Running
+# nvidia-driver-daemonset-xxxxx                         1/1     Running
+# nvidia-gpu-feature-discovery-xxxxx                    1/1     Running
+# nvidia-operator-validator-xxxxx                       1/1     Running
+
+# Verify GPUs are visible
+kubectl describe node dgx-node-01 | grep nvidia.com/gpu
+#   nvidia.com/gpu:     8
+#   nvidia.com/gpu:     8</code></pre>
+  </div>
+
+  <!-- ============================================================
+       3. NETWORK OPERATOR & RDMA IN K8S
+       ============================================================ -->
+  <div class="subsection" id="network-operator-rdma">
+    <h3>3. Network Operator &amp; RDMA in Kubernetes</h3>
+
+    <div class="info-card">
+      <h4>NVIDIA Network Operator</h4>
+      <p>
+        The NVIDIA Network Operator complements the GPU Operator by managing the high-performance
+        networking stack. In a Superpod, each DGX node has 8 ConnectX-7 NICs (400 Gb/s each)
+        providing 3.2 Tb/s of aggregate InfiniBand or RoCE bandwidth for NCCL collective
+        communication. The Network Operator automates the deployment of MLNX_OFED drivers,
+        SR-IOV configuration, RDMA device plugins, and secondary CNI configuration &mdash;
+        ensuring that every GPU pod can access RDMA-capable network interfaces for
+        GPUDirect RDMA data paths.
+      </p>
+    </div>
+
+    <h4>Multus CNI: Multiple Network Interfaces per Pod</h4>
+    <p>
+      Standard Kubernetes pods get a single network interface from the cluster CNI. For GPU workloads,
+      this is insufficient &mdash; you need both a management network (for K8s API, logging, metrics)
+      and high-performance data-plane networks (for NCCL traffic over RDMA). <strong>Multus CNI</strong>
+      is a meta-CNI plugin that attaches multiple network interfaces to a single pod:
+    </p>
+
+    <ul>
+      <li><strong>Primary interface (eth0)</strong> &mdash; Provided by the cluster CNI (Calico or Cilium). Carries management traffic, pod-to-pod communication, service discovery, and DNS.</li>
+      <li><strong>Secondary interfaces (net1..netN)</strong> &mdash; Provided by SR-IOV CNI or host-device CNI. Each interface maps to a ConnectX-7 VF (Virtual Function) or PF (Physical Function) and supports RDMA operations. Typically one per GPU for optimal NCCL topology.</li>
+    </ul>
+
+    <pre><code class="language-yaml"># NetworkAttachmentDefinition for SR-IOV RDMA network
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-rdma-network
+  namespace: gpu-workloads
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: nvidia.com/rdma_shared_device
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "sriov-rdma",
+      "type": "sriov",
+      "vlan": 0,
+      "spoofchk": "off",
+      "trust": "on",
+      "rdma": {
+        "enabled": true
+      },
+      "ipam": {
+        "type": "whereabouts",
+        "range": "192.168.100.0/24",
+        "exclude": ["192.168.100.0/32", "192.168.100.255/32"]
+      }
+    }</code></pre>
+
+    <h4>SR-IOV Device Plugin &amp; RDMA Shared Device Plugin</h4>
+    <p>
+      The <strong>SR-IOV Device Plugin</strong> discovers SR-IOV Virtual Functions on ConnectX NICs
+      and exposes them as schedulable Kubernetes resources (e.g., <code>nvidia.com/sriov_rdma_vf</code>).
+      The <strong>RDMA Shared Device Plugin</strong> exposes RDMA-capable devices as
+      <code>nvidia.com/rdma_shared_device</code>, allowing multiple pods on the same node to share
+      RDMA resources. The "shared" mode is typically used because each DGX node runs a single training
+      pod consuming all 8 GPUs and all 8 NICs.
+    </p>
+
+    <pre><code class="language-yaml"># Complete pod spec with GPU + RDMA multi-network
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-rdma-worker
+  namespace: gpu-workloads
+  annotations:
+    k8s.v1.cni.cncf.io/networks: |
+      [
+        {"name": "sriov-rdma-network", "interface": "net1"},
+        {"name": "sriov-rdma-network", "interface": "net2"},
+        {"name": "sriov-rdma-network", "interface": "net3"},
+        {"name": "sriov-rdma-network", "interface": "net4"},
+        {"name": "sriov-rdma-network", "interface": "net5"},
+        {"name": "sriov-rdma-network", "interface": "net6"},
+        {"name": "sriov-rdma-network", "interface": "net7"},
+        {"name": "sriov-rdma-network", "interface": "net8"}
+      ]
+spec:
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  containers:
+  - name: gpu-worker
+    image: nvcr.io/nvidia/pytorch:24.01-py3
+    securityContext:
+      capabilities:
+        add: ["IPC_LOCK"]          # Required for RDMA memory registration
+    resources:
+      requests:
+        cpu: "64"
+        memory: "512Gi"
+        nvidia.com/gpu: 8
+        nvidia.com/rdma_shared_device: 8
+      limits:
+        cpu: "128"
+        memory: "1024Gi"
+        nvidia.com/gpu: 8
+        nvidia.com/rdma_shared_device: 8
+    env:
+    - name: NCCL_IB_HCA
+      value: "=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7"
+    - name: NCCL_IB_GID_INDEX
+      value: "3"                   # RoCEv2 GID index
+    - name: NCCL_NET_GDR_LEVEL
+      value: "PIX"                 # GPUDirect RDMA: same PCIe switch
+    volumeMounts:
+    - name: shm
+      mountPath: /dev/shm
+  volumes:
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: "128Gi"</code></pre>
+
+    <!-- SVG Diagram: Pod Multi-Network Architecture -->
+    <div class="diagram-container">
+      <h4>Pod Multi-Network Architecture: Primary (Calico) + Secondary (SR-IOV RDMA)</h4>
+      <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pod multi-network diagram showing primary Calico interface and secondary SR-IOV RDMA interfaces">
+        <defs>
+          <marker id="orch-arrow2" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#76b900"/>
+          </marker>
+          <linearGradient id="orch-podGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#2d3748;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#1a202c;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="orch-nicGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:#2b6cb0;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#3182ce;stop-opacity:1" />
+          </linearGradient>
+        </defs>
+
+        <!-- Background -->
+        <rect x="0" y="0" width="900" height="520" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+
+        <!-- Node boundary -->
+        <rect x="20" y="15" width="860" height="490" rx="10" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="6,3"/>
+        <text x="40" y="40" fill="#58a6ff" font-size="14" font-weight="bold">Kubernetes Worker Node (DGX H100)</text>
+
+        <!-- Pod boundary -->
+        <rect x="50" y="55" width="380" height="280" rx="8" fill="url(#orch-podGrad)" stroke="#76b900" stroke-width="2"/>
+        <text x="70" y="80" fill="#76b900" font-size="13" font-weight="bold">Pod: gpu-rdma-worker</text>
+
+        <!-- Container -->
+        <rect x="70" y="95" width="340" height="70" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="1"/>
+        <text x="90" y="120" fill="#e2e8f0" font-size="12" font-weight="bold">Container: pytorch-trainer</text>
+        <text x="90" y="140" fill="#94a3b8" font-size="10">nvcr.io/nvidia/pytorch:24.01-py3</text>
+        <text x="90" y="155" fill="#94a3b8" font-size="10">nvidia.com/gpu: 8 | nvidia.com/rdma_shared_device: 8</text>
+
+        <!-- Primary NIC (eth0) -->
+        <rect x="70" y="180" width="150" height="55" rx="5" fill="#1a365d" stroke="#63b3ed" stroke-width="1.5"/>
+        <text x="85" y="200" fill="#63b3ed" font-size="11" font-weight="bold">eth0 (Primary)</text>
+        <text x="85" y="218" fill="#90cdf4" font-size="10">Calico veth</text>
+        <text x="85" y="230" fill="#90cdf4" font-size="10">10.244.3.15/24</text>
+
+        <!-- Secondary NICs (net1-net8) -->
+        <rect x="240" y="180" width="170" height="140" rx="5" fill="#1a202c" stroke="#f6ad55" stroke-width="1.5"/>
+        <text x="255" y="200" fill="#f6ad55" font-size="11" font-weight="bold">Secondary (SR-IOV)</text>
+        <text x="255" y="218" fill="#fbd38d" font-size="9">net1: mlx5_0 VF - 192.168.100.1</text>
+        <text x="255" y="232" fill="#fbd38d" font-size="9">net2: mlx5_1 VF - 192.168.100.2</text>
+        <text x="255" y="246" fill="#fbd38d" font-size="9">net3: mlx5_2 VF - 192.168.100.3</text>
+        <text x="255" y="260" fill="#fbd38d" font-size="9">net4: mlx5_3 VF - 192.168.100.4</text>
+        <text x="255" y="274" fill="#fbd38d" font-size="9">net5-net8: mlx5_4..mlx5_7 VFs</text>
+        <text x="255" y="310" fill="#ed8936" font-size="9" font-weight="bold">RDMA capable | IPC_LOCK</text>
+
+        <!-- Multus CNI -->
+        <rect x="470" y="55" width="160" height="60" rx="6" fill="#2d3748" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="490" y="80" fill="#a78bfa" font-size="12" font-weight="bold">Multus CNI</text>
+        <text x="490" y="97" fill="#c4b5fd" font-size="10">Meta-plugin (delegates)</text>
+
+        <!-- Calico CNI -->
+        <rect x="470" y="140" width="160" height="50" rx="6" fill="#1a365d" stroke="#63b3ed" stroke-width="1.5"/>
+        <text x="490" y="163" fill="#63b3ed" font-size="11" font-weight="bold">Calico CNI</text>
+        <text x="490" y="178" fill="#90cdf4" font-size="10">Management network</text>
+
+        <!-- SR-IOV CNI -->
+        <rect x="470" y="210" width="160" height="50" rx="6" fill="#44337a" stroke="#f6ad55" stroke-width="1.5"/>
+        <text x="490" y="233" fill="#f6ad55" font-size="11" font-weight="bold">SR-IOV CNI</text>
+        <text x="490" y="248" fill="#fbd38d" font-size="10">RDMA data plane</text>
+
+        <!-- Physical NICs on host -->
+        <rect x="670" y="55" width="190" height="110" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/>
+        <text x="690" y="78" fill="#38bdf8" font-size="11" font-weight="bold">Host NICs</text>
+        <text x="690" y="98" fill="#7dd3fc" font-size="10">eno1: 25GbE (mgmt)</text>
+        <text x="690" y="115" fill="#fbd38d" font-size="10">mlx5_0..mlx5_7: CX-7 400G</text>
+        <text x="690" y="132" fill="#fbd38d" font-size="10">8x ConnectX-7 (IB/RoCE)</text>
+        <text x="690" y="149" fill="#94a3b8" font-size="10">SR-IOV VFs enabled</text>
+
+        <!-- External Networks -->
+        <rect x="670" y="200" width="190" height="50" rx="6" fill="#14532d" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="690" y="222" fill="#4ade80" font-size="11" font-weight="bold">Management Network</text>
+        <text x="690" y="238" fill="#86efac" font-size="10">25 GbE Ethernet</text>
+
+        <rect x="670" y="270" width="190" height="50" rx="6" fill="#7c2d12" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="690" y="292" fill="#fb923c" font-size="11" font-weight="bold">Data Plane Network</text>
+        <text x="690" y="308" fill="#fdba74" font-size="10">400 Gb/s IB / RoCE</text>
+
+        <!-- Arrows: Pod eth0 -> Calico -> mgmt NIC -> mgmt network -->
+        <line x1="220" y1="207" x2="470" y2="165" stroke="#63b3ed" stroke-width="1.5" marker-end="url(#orch-arrow2)"/>
+        <line x1="630" y1="165" x2="670" y2="120" stroke="#63b3ed" stroke-width="1.5" marker-end="url(#orch-arrow2)"/>
+        <line x1="860" y1="120" x2="860" y2="200" stroke="#4ade80" stroke-width="1.5" marker-end="url(#orch-arrow2)"/>
+
+        <!-- Arrows: Pod SR-IOV -> SR-IOV CNI -> CX-7 NICs -> data network -->
+        <line x1="410" y1="250" x2="470" y2="235" stroke="#f6ad55" stroke-width="1.5" marker-end="url(#orch-arrow2)"/>
+        <line x1="630" y1="235" x2="670" y2="130" stroke="#f6ad55" stroke-width="1.5" marker-end="url(#orch-arrow2)"/>
+        <line x1="860" y1="140" x2="860" y2="270" stroke="#fb923c" stroke-width="1.5" marker-end="url(#orch-arrow2)"/>
+
+        <!-- Multus delegation arrows -->
+        <line x1="550" y1="115" x2="550" y2="140" stroke="#a78bfa" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#orch-arrow2)"/>
+        <line x1="550" y1="115" x2="550" y2="210" stroke="#a78bfa" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#orch-arrow2)"/>
+
+        <!-- GPU array (bottom section) -->
+        <rect x="50" y="360" width="580" height="130" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="70" y="385" fill="#76b900" font-size="12" font-weight="bold">GPU Array (DGX H100 Baseboard)</text>
+
+        <!-- 8 GPU boxes -->
+        <rect x="70" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="85" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-0</text>
+        <rect x="140" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="155" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-1</text>
+        <rect x="210" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="225" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-2</text>
+        <rect x="280" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="295" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-3</text>
+        <rect x="350" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="365" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-4</text>
+        <rect x="420" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="435" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-5</text>
+        <rect x="490" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="505" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-6</text>
+        <rect x="560" y="395" width="60" height="40" rx="4" fill="#2d3748" stroke="#76b900" stroke-width="1"/>
+        <text x="575" y="420" fill="#76b900" font-size="10" text-anchor="middle">H100-7</text>
+
+        <!-- NVSwitch label -->
+        <rect x="70" y="445" width="550" height="30" rx="4" fill="#065f46" stroke="#10b981" stroke-width="1"/>
+        <text x="345" y="465" fill="#6ee7b7" font-size="11" text-anchor="middle" font-weight="bold">4x NVSwitch &mdash; 900 GB/s all-to-all NVLink 4.0</text>
+
+        <!-- GPU to NIC mapping note -->
+        <text x="670" y="380" fill="#94a3b8" font-size="10">GPU-NIC affinity:</text>
+        <text x="670" y="396" fill="#fbd38d" font-size="9">GPU 0 &lt;-&gt; mlx5_0 (same PCIe switch)</text>
+        <text x="670" y="410" fill="#fbd38d" font-size="9">GPU 1 &lt;-&gt; mlx5_1 (same PCIe switch)</text>
+        <text x="670" y="424" fill="#94a3b8" font-size="9">... (1:1 mapping for GPUDirect)</text>
+        <text x="670" y="438" fill="#fbd38d" font-size="9">GPU 7 &lt;-&gt; mlx5_7 (same PCIe switch)</text>
+        <text x="670" y="458" fill="#fb923c" font-size="9" font-weight="bold">NCCL_NET_GDR_LEVEL=PIX</text>
+        <text x="670" y="472" fill="#94a3b8" font-size="9">GPU memory &lt;-&gt; NIC via PCIe</text>
+        <text x="670" y="486" fill="#94a3b8" font-size="9">(bypasses CPU / system memory)</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       4. JOB SCHEDULING
+       ============================================================ -->
+  <div class="subsection" id="job-scheduling">
+    <h3>4. Job Scheduling for Distributed Training</h3>
+
+    <div class="info-card">
+      <h4>The Gang Scheduling Problem</h4>
+      <p>
+        Distributed training jobs require <em>all</em> their workers to start simultaneously.
+        A 256-GPU training job (32 nodes x 8 GPUs) using data-parallel + tensor-parallel strategies
+        cannot make progress if only 31 of 32 workers are running &mdash; NCCL initialization hangs
+        waiting for all ranks. Standard Kubernetes scheduling places pods independently, which can
+        lead to <strong>deadlock</strong>: two jobs each get half their pods scheduled, but neither
+        can complete because the remaining pods are blocked by the other job. Gang scheduling solves
+        this by treating all pods in a job as an atomic unit &mdash; either all pods are placed, or
+        none are.
+      </p>
+    </div>
+
+    <h4>Volcano Scheduler</h4>
+    <p>
+      <strong>Volcano</strong> is a CNCF project that provides batch scheduling for Kubernetes.
+      It introduces <code>PodGroup</code> and <code>Queue</code> CRDs, implements gang scheduling,
+      fair-share, priority, and backfill policies. It replaces (or supplements) the default kube-scheduler
+      for batch/HPC workloads:
+    </p>
+
+    <pre><code class="language-yaml"># Volcano Job for distributed training
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: llm-training-gpt4
+spec:
+  minAvailable: 32                  # Gang scheduling: all 32 tasks required
+  schedulerName: volcano
+  queue: high-priority-training
+  policies:
+  - event: PodEvicted
+    action: RestartJob              # Restart entire job if any pod evicted
+  - event: TaskCompleted
+    action: CompleteJob
+  plugins:
+    sla:
+    - --max-waiting-time=30m        # Fail if not scheduled in 30 minutes
+  tasks:
+  - replicas: 32
+    name: worker
+    template:
+      spec:
+        containers:
+        - name: pytorch
+          image: nvcr.io/nvidia/pytorch:24.01-py3
+          command: ["torchrun"]
+          args:
+          - "--nproc_per_node=8"
+          - "--nnodes=32"
+          - "--rdzv_backend=c10d"
+          - "--rdzv_endpoint=$(MASTER_ADDR):29500"
+          - "train.py"
+          resources:
+            limits:
+              nvidia.com/gpu: 8
+              nvidia.com/rdma_shared_device: 8
+          volumeMounts:
+          - name: shm
+            mountPath: /dev/shm
+          - name: training-data
+            mountPath: /data
+        volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "128Gi"
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: lustre-training-data</code></pre>
+
+    <h4>Kueue: K8s-Native Job Queueing</h4>
+    <p>
+      <strong>Kueue</strong> is a Kubernetes-native job queueing system (SIG-scheduling project) designed
+      for multi-tenant GPU clusters. Unlike Volcano (which provides its own scheduler), Kueue works
+      <em>alongside</em> the default scheduler by controlling <em>when</em> workloads are admitted
+      to the cluster. It provides:
+    </p>
+    <ul>
+      <li><strong>ClusterQueues</strong> &mdash; Define resource pools (e.g., 256 GPUs for team-A, 128 for team-B)</li>
+      <li><strong>LocalQueues</strong> &mdash; Namespace-scoped queues that map to ClusterQueues</li>
+      <li><strong>ResourceFlavors</strong> &mdash; Differentiate GPU types (H100 vs A100) within a queue</li>
+      <li><strong>Cohorts</strong> &mdash; Allow queues to borrow unused resources from peer queues</li>
+      <li><strong>Preemption</strong> &mdash; Lower-priority workloads can be preempted when higher-priority work arrives</li>
+    </ul>
+
+    <pre><code class="language-yaml"># Kueue ClusterQueue with resource flavors and borrowing
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: team-research
+spec:
+  namespaceSelector: {}
+  queueingStrategy: BestEffortFIFO
+  preemption:
+    reclaimWithinCohort: Any
+    borrowWithinCohort:
+      policy: LowerPriority
+      maxPriorityThreshold: 100
+  resourceGroups:
+  - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+    flavors:
+    - name: h100-sxm
+      resources:
+      - name: "nvidia.com/gpu"
+        nominalQuota: 256            # Team's guaranteed 256 GPUs
+        borrowingLimit: 128          # Can borrow up to 128 more from cohort
+      - name: "cpu"
+        nominalQuota: 2048
+      - name: "memory"
+        nominalQuota: "16Ti"
+  cohort: research-cohort            # Share unused GPUs with peer queues
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: training-queue
+  namespace: team-research
+spec:
+  clusterQueue: team-research</code></pre>
+
+    <h4>Kubeflow Training Operator: PyTorchJob</h4>
+    <p>
+      The Kubeflow Training Operator provides high-level CRDs for distributed training frameworks.
+      <code>PyTorchJob</code> automates the setup of distributed PyTorch training &mdash;
+      configuring <code>MASTER_ADDR</code>, <code>MASTER_PORT</code>, <code>WORLD_SIZE</code>,
+      and <code>RANK</code> environment variables, and managing the lifecycle of master and worker pods:
+    </p>
+
+    <pre><code class="language-yaml"># Full PyTorchJob for large-scale LLM training
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: llm-training-70b
+  namespace: team-research
+  labels:
+    kueue.x-k8s.io/queue-name: training-queue
+spec:
+  elasticPolicy:
+    minReplicas: 16
+    maxReplicas: 32
+    rdzvBackend: c10d
+    rdzvPort: 29500
+    maxRestarts: 3
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          annotations:
+            k8s.v1.cni.cncf.io/networks: sriov-rdma-network
+        spec:
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          nodeSelector:
+            nvidia.com/gpu.product: "NVIDIA-H100-SXM5-80GB"
+          containers:
+          - name: pytorch
+            image: nvcr.io/nvidia/pytorch:24.01-py3
+            command: ["torchrun"]
+            args:
+            - "--nproc_per_node=8"
+            - "--nnodes=32"
+            - "--rdzv_backend=c10d"
+            - "--rdzv_endpoint=$(MASTER_ADDR):$(MASTER_PORT)"
+            - "/workspace/train_llm.py"
+            - "--model=llama-70b"
+            - "--batch-size=2"
+            - "--gradient-accumulation-steps=8"
+            - "--fp8-training"
+            - "--tensor-parallel-size=8"
+            - "--pipeline-parallel-size=4"
+            - "--data-parallel-size=8"
+            resources:
+              limits:
+                nvidia.com/gpu: 8
+                nvidia.com/rdma_shared_device: 8
+                cpu: "128"
+                memory: "1024Gi"
+            env:
+            - name: NCCL_DEBUG
+              value: "WARN"
+            - name: NCCL_IB_HCA
+              value: "mlx5"
+            - name: NCCL_SOCKET_IFNAME
+              value: "eth0"
+            - name: CUDA_DEVICE_MAX_CONNECTIONS
+              value: "1"
+            volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+          volumes:
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "128Gi"
+          - name: training-data
+            persistentVolumeClaim:
+              claimName: lustre-training-data
+          - name: checkpoints
+            persistentVolumeClaim:
+              claimName: lustre-checkpoints
+    Worker:
+      replicas: 31
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          annotations:
+            k8s.v1.cni.cncf.io/networks: sriov-rdma-network
+        spec:
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+          nodeSelector:
+            nvidia.com/gpu.product: "NVIDIA-H100-SXM5-80GB"
+          containers:
+          - name: pytorch
+            image: nvcr.io/nvidia/pytorch:24.01-py3
+            command: ["torchrun"]
+            args:
+            - "--nproc_per_node=8"
+            - "--nnodes=32"
+            - "--rdzv_backend=c10d"
+            - "--rdzv_endpoint=$(MASTER_ADDR):$(MASTER_PORT)"
+            - "/workspace/train_llm.py"
+            - "--model=llama-70b"
+            - "--batch-size=2"
+            - "--gradient-accumulation-steps=8"
+            - "--fp8-training"
+            - "--tensor-parallel-size=8"
+            - "--pipeline-parallel-size=4"
+            - "--data-parallel-size=8"
+            resources:
+              limits:
+                nvidia.com/gpu: 8
+                nvidia.com/rdma_shared_device: 8
+                cpu: "128"
+                memory: "1024Gi"
+            env:
+            - name: NCCL_DEBUG
+              value: "WARN"
+            - name: NCCL_IB_HCA
+              value: "mlx5"
+            - name: NCCL_SOCKET_IFNAME
+              value: "eth0"
+            volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: training-data
+              mountPath: /data
+            - name: checkpoints
+              mountPath: /checkpoints
+          volumes:
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "128Gi"
+          - name: training-data
+            persistentVolumeClaim:
+              claimName: lustre-training-data
+          - name: checkpoints
+            persistentVolumeClaim:
+              claimName: lustre-checkpoints</code></pre>
+
+    <h4>Priority, Preemption &amp; Resource Quotas</h4>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> PriorityClasses and Preemption
+      </button>
+      <div class="expandable-content">
+        <pre><code class="language-yaml"># PriorityClasses for GPU workload tiers
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: critical-training
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Mission-critical training runs (can preempt all lower)"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: standard-training
+value: 100000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Standard training jobs"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: batch-inference
+value: 10000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Batch inference (preemptable by training)"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: dev-interactive
+value: 1000
+globalDefault: true
+preemptionPolicy: Never
+description: "Interactive dev (lowest, non-preempting)"</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> Resource Quotas per Namespace/Team
+      </button>
+      <div class="expandable-content">
+        <pre><code class="language-yaml"># ResourceQuota for team namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gpu-quota
+  namespace: team-research
+spec:
+  hard:
+    requests.nvidia.com/gpu: "256"    # Max 256 GPUs for this team
+    requests.cpu: "4096"
+    requests.memory: "32Ti"
+    persistentvolumeclaims: "50"
+    pods: "500"
+  scopeSelector:
+    matchExpressions:
+    - scopeName: PriorityClass
+      operator: In
+      values:
+      - critical-training
+      - standard-training
+---
+# Separate quota for low-priority/dev workloads
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dev-quota
+  namespace: team-research
+spec:
+  hard:
+    requests.nvidia.com/gpu: "32"     # Only 32 GPUs for dev/interactive
+    pods: "100"
+  scopeSelector:
+    matchExpressions:
+    - scopeName: PriorityClass
+      operator: In
+      values:
+      - dev-interactive
+      - batch-inference</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       5. CONTAINER RUNTIME FOR GPUs
+       ============================================================ -->
+  <div class="subsection" id="container-runtime-gpu">
+    <h3>5. Container Runtime for GPUs</h3>
+
+    <div class="info-card">
+      <h4>How GPU Access Works in Containers</h4>
+      <p>
+        GPU containers in Kubernetes rely on a chain of components that bridge the gap between the
+        Kubernetes resource model and the Linux device layer. The process works as follows:
+      </p>
+      <ol>
+        <li>
+          <strong>Pod requests <code>nvidia.com/gpu: N</code></strong> &mdash; The Kubernetes scheduler
+          finds a node with N available GPUs (tracked by the NVIDIA Device Plugin). The pod is bound to
+          that node.
+        </li>
+        <li>
+          <strong>Device Plugin allocates GPUs</strong> &mdash; The kubelet calls the NVIDIA Device Plugin's
+          <code>Allocate()</code> RPC. The device plugin returns the specific GPU device IDs (e.g.,
+          <code>GPU-a1b2c3d4</code>) and the environment variable <code>NVIDIA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7</code>.
+        </li>
+        <li>
+          <strong>nvidia-container-runtime hook fires</strong> &mdash; When containerd creates the container,
+          the NVIDIA container runtime (configured as a runtime handler in containerd) intercepts the OCI
+          spec. The <code>nvidia-container-runtime-hook</code> (now called <code>nvidia-container-toolkit</code>)
+          modifies the container spec to:
+          <ul>
+            <li>Bind-mount GPU device files: <code>/dev/nvidia0</code>..<code>/dev/nvidia7</code>,
+                <code>/dev/nvidiactl</code>, <code>/dev/nvidia-uvm</code>, <code>/dev/nvidia-uvm-tools</code></li>
+            <li>Mount NVIDIA driver libraries from the host into the container (libcuda.so, libnvidia-ml.so, etc.)</li>
+            <li>Set <code>NVIDIA_VISIBLE_DEVICES</code> and <code>NVIDIA_DRIVER_CAPABILITIES</code> environment variables</li>
+          </ul>
+        </li>
+        <li>
+          <strong>Container sees GPUs</strong> &mdash; Inside the container, <code>nvidia-smi</code>
+          shows the allocated GPUs, CUDA libraries work transparently, and GPU workloads run as if on bare metal.
+        </li>
+      </ol>
+    </div>
+
+    <pre><code class="language-bash"># containerd configuration (/etc/containerd/config.toml)
+# The NVIDIA container runtime is registered as a handler
+
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  default_runtime_name = "nvidia"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+  runtime_type = "io.containerd.runc.v2"
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+    BinaryName = "/usr/bin/nvidia-container-runtime"
+
+# Verify GPU access inside a container
+kubectl run gpu-test --rm -it --image=nvcr.io/nvidia/cuda:12.3.1-base-ubuntu22.04 \
+  --limits=nvidia.com/gpu=1 -- nvidia-smi
+
+# Expected output:
+# +-----------------------------------------------------------------------------------------+
+# | NVIDIA-SMI 535.129.03   Driver Version: 535.129.03   CUDA Version: 12.3                 |
+# |--------------------------------------------+------------------------+-------------------+
+# | GPU  Name                 Persistence-M     | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+# | Fan  Temp   Perf          Pwr:Usage/Cap     |           Memory-Usage | GPU-Util  Compute M. |
+# |==============================================+========================+===================|
+# |   0  NVIDIA H100 80GB HBM3           On     | 00000000:1B:00.0  Off  |                   0 |
+# | N/A   32C    P0              72W / 700W      |       0MiB / 81559MiB |      0%      Default |
+# +--------------------------------------------+------------------------+-------------------+</code></pre>
+
+    <div class="callout callout-info">
+      <h5>CDI: Container Device Interface</h5>
+      <p>
+        CDI is a newer standard (part of the CNCF container ecosystem) that provides a
+        vendor-neutral, declarative way to make devices available to containers. Instead of runtime
+        hooks that modify the OCI spec at launch time, CDI uses JSON specification files
+        (e.g., <code>/etc/cdi/nvidia.yaml</code>) that describe which device nodes, mounts, and
+        environment variables should be injected. CDI is supported by containerd 1.7+, CRI-O 1.27+,
+        and Podman 4.1+. The NVIDIA Container Toolkit generates CDI specs via
+        <code>nvidia-ctk cdi generate</code>. CDI is the future direction for device exposure in
+        containers, replacing the hook-based approach.
+      </p>
+    </div>
+
+    <pre><code class="language-bash"># Generate CDI spec for NVIDIA GPUs
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+
+# CDI spec structure (simplified)
+# cdiVersion: "0.6.0"
+# kind: "nvidia.com/gpu"
+# devices:
+# - name: "0"
+#   containerEdits:
+#     deviceNodes:
+#     - path: /dev/nvidia0
+#       hostPath: /dev/nvidia0
+#     mounts:
+#     - hostPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.129.03
+#       containerPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+#     env:
+#     - NVIDIA_VISIBLE_DEVICES=0</code></pre>
+  </div>
+
+  <!-- ============================================================
+       6. SERVICE MESH & NETWORKING IN K8S
+       ============================================================ -->
+  <div class="subsection" id="service-mesh-networking">
+    <h3>6. Service Mesh &amp; Networking in Kubernetes</h3>
+
+    <p>
+      The management-plane network in a GPU cluster handles API server communication, pod-to-pod
+      connectivity for non-RDMA traffic, service discovery, ingress, and observability. While the
+      RDMA data plane carries the heavy NCCL traffic, the management network must still be reliable
+      and performant.
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Options</th>
+            <th>Notes for GPU Clusters</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>CNI Plugin</strong></td>
+            <td>
+              <strong>Calico</strong> (BGP-based, mature, NetworkPolicy support)<br>
+              <strong>Cilium</strong> (eBPF-based, high performance, L7 policies)
+            </td>
+            <td>
+              Calico is most common in on-prem HPC. Uses BGP peering with ToR switches for
+              native pod routing without overlay (VXLAN overhead avoided). Cilium offers eBPF
+              datapath for lower latency and kernel-bypass networking. Both support NetworkPolicy.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>NetworkPolicy</strong></td>
+            <td>Microsegmentation rules per namespace/pod</td>
+            <td>
+              Isolate team namespaces. Allow GPU pods to communicate within a training job
+              (same labels) but block cross-team traffic. Example: allow all traffic within
+              <code>app=llm-training-042</code> pods, deny ingress from other namespaces.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Load Balancer</strong></td>
+            <td><strong>MetalLB</strong> (bare-metal LB using L2/BGP)</td>
+            <td>
+              Bare-metal clusters lack cloud LB integration. MetalLB assigns external IPs from
+              a configured pool and announces them via BGP or ARP/NDP. Used for exposing inference
+              endpoints, Jupyter notebooks, and monitoring dashboards.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Ingress Controller</strong></td>
+            <td>
+              <strong>NGINX Ingress Controller</strong><br>
+              <strong>Istio Gateway</strong>
+            </td>
+            <td>
+              Routes external HTTP/gRPC traffic to services. For Triton Inference Server, the
+              ingress terminates TLS and routes to the correct model endpoint. Istio adds mTLS,
+              traffic splitting (canary deployments), and observability.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Service Types</strong></td>
+            <td>ClusterIP, NodePort, LoadBalancer</td>
+            <td>
+              <strong>ClusterIP</strong>: Default, internal-only. For inter-service communication.<br>
+              <strong>NodePort</strong>: Exposes on static port on all nodes. For debugging.<br>
+              <strong>LoadBalancer</strong>: External IP via MetalLB. For production inference APIs.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>DNS</strong></td>
+            <td>CoreDNS</td>
+            <td>
+              Cluster-internal DNS for service discovery. Training pods discover the master via
+              DNS (<code>llm-training-master-0.default.svc.cluster.local</code>). Ensure CoreDNS
+              scales to handle large clusters (100+ nodes).
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code class="language-yaml"># NetworkPolicy: allow intra-job NCCL traffic, deny cross-namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-training-job-traffic
+  namespace: team-research
+spec:
+  podSelector:
+    matchLabels:
+      app: llm-training
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: llm-training
+    ports:
+    - protocol: TCP
+      port: 29500               # PyTorch rendezvous port
+    - protocol: TCP
+      port: 29400               # NCCL socket port range
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: llm-training
+  - to:                         # Allow DNS resolution
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  - to:                         # Allow access to storage
+    - ipBlock:
+        cidr: 10.0.0.0/8       # Lustre/GPFS storage network</code></pre>
+  </div>
+
+  <!-- ============================================================
+       7. CLUSTER MANAGEMENT AT SCALE
+       ============================================================ -->
+  <div class="subsection" id="cluster-management">
+    <h3>7. Cluster Management at Scale</h3>
+
+    <div class="info-card">
+      <h4>Day-0 through Day-2 Operations</h4>
+      <p>
+        Managing a Superpod with hundreds of nodes requires automation at every layer: from bare-metal
+        provisioning (Day 0) through initial cluster setup (Day 1) to ongoing operations, upgrades,
+        and scaling (Day 2). The toolchain spans hardware lifecycle management, OS provisioning,
+        Kubernetes cluster creation, and GitOps-driven application deployment.
+      </p>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> Bare-Metal Provisioning: PXE Boot &amp; MAAS
+      </button>
+      <div class="expandable-content">
+        <p>
+          DGX nodes are provisioned via PXE (Preboot Execution Environment) boot. The process:
+        </p>
+        <ol>
+          <li>Node powers on and BMC (Baseboard Management Controller) network boots via DHCP/TFTP</li>
+          <li>PXE server delivers boot image (iPXE chain-loads to provisioning system)</li>
+          <li>MAAS (Metal as a Service) or Foreman manages the full lifecycle:
+            <ul>
+              <li>Hardware discovery and commissioning (detect CPUs, GPUs, NICs, storage)</li>
+              <li>OS deployment (Ubuntu 22.04 LTS with NVIDIA-optimized kernel)</li>
+              <li>Network configuration (bonding, VLANs, IP assignment)</li>
+              <li>Post-deploy hooks for NVIDIA driver and MLNX_OFED installation</li>
+            </ul>
+          </li>
+          <li>Ansible takes over for post-OS configuration:
+            <ul>
+              <li>NVIDIA driver installation (or GPU Operator handles this)</li>
+              <li>MLNX_OFED installation and configuration</li>
+              <li>containerd installation and configuration</li>
+              <li>kubelet installation and cluster join</li>
+              <li>BIOS/firmware settings (IOMMU, SR-IOV, ACS, power profile)</li>
+            </ul>
+          </li>
+        </ol>
+        <pre><code class="language-bash"># Ansible playbook excerpt for DGX node preparation
+# ansible-playbook -i inventory/dgx-nodes.yaml site.yaml
+
+# Example tasks/gpu-setup.yaml:
+- name: Load NVIDIA kernel modules
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - nvidia
+    - nvidia_uvm
+    - nvidia_modeset
+    - nvidia_peermem          # GPUDirect RDMA peer memory module
+
+- name: Enable persistent mode for all GPUs
+  command: nvidia-smi -pm 1
+
+- name: Set GPU clocks to max for training
+  command: nvidia-smi -lgc 1980,1980
+  # Lock GPU clocks to max for consistent training performance
+
+- name: Configure hugepages for RDMA
+  sysctl:
+    name: vm.nr_hugepages
+    value: "16384"            # 32GB of hugepages for RDMA registration
+    sysctl_set: yes
+
+- name: Enable SR-IOV on ConnectX-7 NICs
+  command: >
+    mlxconfig -d {{ item }} set
+    SRIOV_EN=1
+    NUM_OF_VFS=8
+  loop: "{{ connectx7_devices }}"</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> Cluster API for Kubernetes Lifecycle
+      </button>
+      <div class="expandable-content">
+        <p>
+          <strong>Cluster API (CAPI)</strong> is a Kubernetes sub-project that uses declarative,
+          Kubernetes-style APIs to create, configure, and manage Kubernetes clusters. For bare-metal
+          GPU clusters, the <strong>CAPI BYOH (Bring Your Own Host)</strong> or
+          <strong>CAPI Metal3</strong> providers manage the lifecycle of worker nodes:
+        </p>
+        <pre><code class="language-yaml"># Cluster API Machine definition for DGX nodes
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: Metal3Machine
+metadata:
+  name: dgx-worker-01
+  namespace: metal3
+spec:
+  image:
+    url: http://provision-server/images/ubuntu-22.04-dgx.qcow2
+    checksum: http://provision-server/images/ubuntu-22.04-dgx.sha256
+  hostSelector:
+    matchLabels:
+      machine-type: dgx-h100
+      rack: rack-01
+  dataTemplate:
+    name: dgx-worker-template
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: dgx-gpu-workers
+spec:
+  clusterName: superpod-cluster
+  replicas: 32
+  selector:
+    matchLabels:
+      nodepool: gpu-workers
+  template:
+    spec:
+      clusterName: superpod-cluster
+      version: "v1.28.4"
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: dgx-worker-bootstrap
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: Metal3MachineTemplate
+        name: dgx-worker-template</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> GitOps with ArgoCD
+      </button>
+      <div class="expandable-content">
+        <p>
+          <strong>ArgoCD</strong> implements GitOps for Kubernetes &mdash; the desired cluster state
+          is declared in Git, and ArgoCD continuously reconciles the live state to match. For GPU
+          clusters, this manages the deployment of operators, training jobs, inference services,
+          monitoring stacks, and cluster configurations:
+        </p>
+        <pre><code class="language-yaml"># ArgoCD Application for GPU Operator
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gpu-operator
+  namespace: argocd
+spec:
+  project: infrastructure
+  source:
+    repoURL: https://helm.ngc.nvidia.com/nvidia
+    chart: gpu-operator
+    targetRevision: v23.9.1
+    helm:
+      values: |
+        driver:
+          version: "535.129.03"
+          rdma:
+            enabled: true
+            useHostMofed: true
+        devicePlugin:
+          config:
+            name: device-plugin-config
+        dcgmExporter:
+          config:
+            name: dcgm-metrics-config
+        migManager:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gpu-operator
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+---
+# ArgoCD Application for monitoring stack
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gpu-monitoring
+  namespace: argocd
+spec:
+  project: observability
+  source:
+    repoURL: https://github.com/org/gpu-cluster-config.git
+    path: monitoring/
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <button class="expandable-toggle" aria-expanded="false">
+        <span class="toggle-icon">+</span> Helm Charts &amp; Kustomize
+      </button>
+      <div class="expandable-content">
+        <p>
+          <strong>Helm</strong> packages Kubernetes manifests as charts with templated values,
+          enabling parameterized deployments. <strong>Kustomize</strong> uses an overlay-based
+          approach without templates, modifying base manifests through patches. In practice, many
+          GPU cluster operators use both: Helm for third-party charts (GPU Operator, Prometheus,
+          ArgoCD) and Kustomize for in-house workload definitions.
+        </p>
+        <pre><code class="language-bash"># Repository structure for a GPU cluster managed via GitOps
+# gpu-cluster-config/
+# |-- base/
+# |   |-- kustomization.yaml
+# |   |-- namespaces.yaml
+# |   |-- resource-quotas.yaml
+# |   |-- priority-classes.yaml
+# |   |-- network-policies.yaml
+# |-- overlays/
+# |   |-- production/
+# |   |   |-- kustomization.yaml        # Production-specific patches
+# |   |   |-- gpu-quota-patch.yaml       # 512 GPUs for prod
+# |   |-- staging/
+# |       |-- kustomization.yaml
+# |       |-- gpu-quota-patch.yaml       # 64 GPUs for staging
+# |-- helm-values/
+# |   |-- gpu-operator-values.yaml
+# |   |-- prometheus-values.yaml
+# |   |-- volcano-values.yaml
+# |-- apps/
+#     |-- argocd-apps.yaml               # ArgoCD Application manifests</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SVG DIAGRAM: K8s GPU Cluster Architecture
+       ============================================================ -->
+  <div class="diagram-container">
+    <h4>Kubernetes GPU Cluster Architecture</h4>
+    <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kubernetes GPU cluster architecture showing control plane, worker nodes, device plugins, operators, and network topology">
+      <defs>
+        <marker id="orch-arrow3" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#76b900"/>
+        </marker>
+        <marker id="orch-arrow-blue" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+        </marker>
+      </defs>
+
+      <!-- Background -->
+      <rect x="0" y="0" width="1000" height="700" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+      <text x="500" y="28" fill="#e2e8f0" font-size="16" text-anchor="middle" font-weight="bold">Kubernetes GPU Cluster Architecture (DGX SuperPOD)</text>
+
+      <!-- ===== Control Plane ===== -->
+      <rect x="20" y="45" width="960" height="115" rx="8" fill="#1a1a2e" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="40" y="68" fill="#a78bfa" font-size="13" font-weight="bold">Control Plane (3x HA)</text>
+
+      <!-- API Server -->
+      <rect x="40" y="80" width="130" height="60" rx="5" fill="#2d2b55" stroke="#a78bfa" stroke-width="1"/>
+      <text x="105" y="105" fill="#c4b5fd" font-size="11" text-anchor="middle" font-weight="bold">kube-apiserver</text>
+      <text x="105" y="120" fill="#8b87b8" font-size="9" text-anchor="middle">REST API endpoint</text>
+
+      <!-- etcd -->
+      <rect x="185" y="80" width="110" height="60" rx="5" fill="#2d2b55" stroke="#a78bfa" stroke-width="1"/>
+      <text x="240" y="105" fill="#c4b5fd" font-size="11" text-anchor="middle" font-weight="bold">etcd</text>
+      <text x="240" y="120" fill="#8b87b8" font-size="9" text-anchor="middle">Cluster state store</text>
+
+      <!-- Scheduler -->
+      <rect x="310" y="80" width="130" height="60" rx="5" fill="#2d2b55" stroke="#a78bfa" stroke-width="1"/>
+      <text x="375" y="105" fill="#c4b5fd" font-size="11" text-anchor="middle" font-weight="bold">kube-scheduler</text>
+      <text x="375" y="120" fill="#8b87b8" font-size="9" text-anchor="middle">+ Volcano scheduler</text>
+
+      <!-- Controller Manager -->
+      <rect x="455" y="80" width="150" height="60" rx="5" fill="#2d2b55" stroke="#a78bfa" stroke-width="1"/>
+      <text x="530" y="105" fill="#c4b5fd" font-size="11" text-anchor="middle" font-weight="bold">controller-manager</text>
+      <text x="530" y="120" fill="#8b87b8" font-size="9" text-anchor="middle">Node, Job controllers</text>
+
+      <!-- Operators -->
+      <rect x="620" y="80" width="140" height="60" rx="5" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="690" y="100" fill="#63b3ed" font-size="10" text-anchor="middle" font-weight="bold">GPU Operator</text>
+      <text x="690" y="115" fill="#7dd3fc" font-size="9" text-anchor="middle">Network Operator</text>
+      <text x="690" y="128" fill="#7dd3fc" font-size="9" text-anchor="middle">Training Operator</text>
+
+      <!-- ArgoCD -->
+      <rect x="775" y="80" width="120" height="60" rx="5" fill="#14532d" stroke="#4ade80" stroke-width="1"/>
+      <text x="835" y="100" fill="#4ade80" font-size="10" text-anchor="middle" font-weight="bold">ArgoCD</text>
+      <text x="835" y="115" fill="#86efac" font-size="9" text-anchor="middle">GitOps Controller</text>
+      <text x="835" y="128" fill="#86efac" font-size="9" text-anchor="middle">Helm / Kustomize</text>
+
+      <!-- ===== Worker Nodes ===== -->
+      <!-- Worker Node 1 -->
+      <rect x="20" y="180" width="310" height="295" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1.5"/>
+      <text x="40" y="203" fill="#76b900" font-size="12" font-weight="bold">DGX H100 Node 1</text>
+      <text x="250" y="203" fill="#94a3b8" font-size="9">nvidia.com/gpu: 8</text>
+
+      <!-- kubelet -->
+      <rect x="35" y="213" width="90" height="35" rx="4" fill="#2d3748" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="80" y="235" fill="#e2e8f0" font-size="10" text-anchor="middle">kubelet</text>
+
+      <!-- containerd -->
+      <rect x="135" y="213" width="90" height="35" rx="4" fill="#2d3748" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="180" y="235" fill="#e2e8f0" font-size="10" text-anchor="middle">containerd</text>
+
+      <!-- NVIDIA runtime -->
+      <rect x="235" y="213" width="85" height="35" rx="4" fill="#2d3748" stroke="#f6ad55" stroke-width="1"/>
+      <text x="277" y="230" fill="#f6ad55" font-size="8" text-anchor="middle">nvidia-ctr</text>
+      <text x="277" y="242" fill="#f6ad55" font-size="8" text-anchor="middle">runtime</text>
+
+      <!-- Device Plugin -->
+      <rect x="35" y="258" width="130" height="30" rx="4" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="100" y="278" fill="#63b3ed" font-size="9" text-anchor="middle">NVIDIA Device Plugin</text>
+
+      <!-- DCGM Exporter -->
+      <rect x="175" y="258" width="145" height="30" rx="4" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="247" y="278" fill="#63b3ed" font-size="9" text-anchor="middle">DCGM Exporter (:9400)</text>
+
+      <!-- GFD -->
+      <rect x="35" y="298" width="130" height="30" rx="4" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="100" y="318" fill="#63b3ed" font-size="9" text-anchor="middle">GPU Feature Discovery</text>
+
+      <!-- SR-IOV DP -->
+      <rect x="175" y="298" width="145" height="30" rx="4" fill="#44337a" stroke="#f6ad55" stroke-width="1"/>
+      <text x="247" y="318" fill="#f6ad55" font-size="9" text-anchor="middle">SR-IOV Device Plugin</text>
+
+      <!-- GPUs -->
+      <rect x="35" y="340" width="285" height="55" rx="4" fill="#0f1a0f" stroke="#76b900" stroke-width="1"/>
+      <text x="50" y="358" fill="#76b900" font-size="10" font-weight="bold">8x H100 SXM5 80GB</text>
+      <!-- Mini GPU blocks -->
+      <rect x="45" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="59" y="379" fill="#76b900" font-size="7" text-anchor="middle">G0</text>
+      <rect x="78" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="92" y="379" fill="#76b900" font-size="7" text-anchor="middle">G1</text>
+      <rect x="111" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="125" y="379" fill="#76b900" font-size="7" text-anchor="middle">G2</text>
+      <rect x="144" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="158" y="379" fill="#76b900" font-size="7" text-anchor="middle">G3</text>
+      <rect x="177" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="191" y="379" fill="#76b900" font-size="7" text-anchor="middle">G4</text>
+      <rect x="210" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="224" y="379" fill="#76b900" font-size="7" text-anchor="middle">G5</text>
+      <rect x="243" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="257" y="379" fill="#76b900" font-size="7" text-anchor="middle">G6</text>
+      <rect x="276" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="290" y="379" fill="#76b900" font-size="7" text-anchor="middle">G7</text>
+
+      <!-- NICs -->
+      <rect x="35" y="405" width="285" height="35" rx="4" fill="#1a0f1f" stroke="#f6ad55" stroke-width="1"/>
+      <text x="50" y="420" fill="#f6ad55" font-size="10" font-weight="bold">8x ConnectX-7 400G</text>
+      <text x="50" y="433" fill="#fbd38d" font-size="8">mlx5_0..mlx5_7 (SR-IOV enabled, RDMA)</text>
+
+      <!-- Training Pod on Node 1 -->
+      <rect x="37" y="446" width="100" height="22" rx="3" fill="#065f46" stroke="#10b981" stroke-width="1"/>
+      <text x="87" y="461" fill="#6ee7b7" font-size="8" text-anchor="middle">Pod: worker-0</text>
+
+      <!-- Worker Node 2 (abbreviated) -->
+      <rect x="345" y="180" width="310" height="295" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1.5"/>
+      <text x="365" y="203" fill="#76b900" font-size="12" font-weight="bold">DGX H100 Node 2</text>
+      <text x="575" y="203" fill="#94a3b8" font-size="9">nvidia.com/gpu: 8</text>
+
+      <!-- Repeat components (abbreviated) -->
+      <rect x="360" y="213" width="90" height="35" rx="4" fill="#2d3748" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="405" y="235" fill="#e2e8f0" font-size="10" text-anchor="middle">kubelet</text>
+      <rect x="460" y="213" width="90" height="35" rx="4" fill="#2d3748" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="505" y="235" fill="#e2e8f0" font-size="10" text-anchor="middle">containerd</text>
+      <rect x="560" y="213" width="85" height="35" rx="4" fill="#2d3748" stroke="#f6ad55" stroke-width="1"/>
+      <text x="602" y="230" fill="#f6ad55" font-size="8" text-anchor="middle">nvidia-ctr</text>
+      <text x="602" y="242" fill="#f6ad55" font-size="8" text-anchor="middle">runtime</text>
+
+      <rect x="360" y="258" width="130" height="30" rx="4" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="425" y="278" fill="#63b3ed" font-size="9" text-anchor="middle">NVIDIA Device Plugin</text>
+      <rect x="500" y="258" width="145" height="30" rx="4" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="572" y="278" fill="#63b3ed" font-size="9" text-anchor="middle">DCGM Exporter (:9400)</text>
+
+      <rect x="360" y="298" width="130" height="30" rx="4" fill="#1a365d" stroke="#63b3ed" stroke-width="1"/>
+      <text x="425" y="318" fill="#63b3ed" font-size="9" text-anchor="middle">GPU Feature Discovery</text>
+      <rect x="500" y="298" width="145" height="30" rx="4" fill="#44337a" stroke="#f6ad55" stroke-width="1"/>
+      <text x="572" y="318" fill="#f6ad55" font-size="9" text-anchor="middle">SR-IOV Device Plugin</text>
+
+      <rect x="360" y="340" width="285" height="55" rx="4" fill="#0f1a0f" stroke="#76b900" stroke-width="1"/>
+      <text x="375" y="358" fill="#76b900" font-size="10" font-weight="bold">8x H100 SXM5 80GB</text>
+      <rect x="370" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="384" y="379" fill="#76b900" font-size="7" text-anchor="middle">G0</text>
+      <rect x="403" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="417" y="379" fill="#76b900" font-size="7" text-anchor="middle">G1</text>
+      <rect x="436" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="450" y="379" fill="#76b900" font-size="7" text-anchor="middle">G2</text>
+      <rect x="469" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="483" y="379" fill="#76b900" font-size="7" text-anchor="middle">G3</text>
+      <rect x="502" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="516" y="379" fill="#76b900" font-size="7" text-anchor="middle">G4</text>
+      <rect x="535" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="549" y="379" fill="#76b900" font-size="7" text-anchor="middle">G5</text>
+      <rect x="568" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="582" y="379" fill="#76b900" font-size="7" text-anchor="middle">G6</text>
+      <rect x="601" y="365" width="28" height="20" rx="2" fill="#1a3a1a" stroke="#76b900" stroke-width="0.5"/>
+      <text x="615" y="379" fill="#76b900" font-size="7" text-anchor="middle">G7</text>
+
+      <rect x="360" y="405" width="285" height="35" rx="4" fill="#1a0f1f" stroke="#f6ad55" stroke-width="1"/>
+      <text x="375" y="420" fill="#f6ad55" font-size="10" font-weight="bold">8x ConnectX-7 400G</text>
+      <text x="375" y="433" fill="#fbd38d" font-size="8">mlx5_0..mlx5_7 (SR-IOV enabled, RDMA)</text>
+
+      <rect x="362" y="446" width="100" height="22" rx="3" fill="#065f46" stroke="#10b981" stroke-width="1"/>
+      <text x="412" y="461" fill="#6ee7b7" font-size="8" text-anchor="middle">Pod: worker-1</text>
+
+      <!-- Node N (placeholder) -->
+      <rect x="670" y="180" width="310" height="295" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1.5" stroke-dasharray="6,3"/>
+      <text x="690" y="203" fill="#76b900" font-size="12" font-weight="bold">DGX H100 Node 3..N</text>
+      <text x="825" y="320" fill="#4a5568" font-size="28" text-anchor="middle">...</text>
+      <text x="825" y="360" fill="#94a3b8" font-size="11" text-anchor="middle">Same stack per node</text>
+      <text x="825" y="380" fill="#94a3b8" font-size="11" text-anchor="middle">(GPU Operator DaemonSets)</text>
+      <text x="825" y="410" fill="#76b900" font-size="11" text-anchor="middle">Up to 32+ nodes per SuperPOD</text>
+      <text x="825" y="430" fill="#76b900" font-size="11" text-anchor="middle">= 256+ H100 GPUs</text>
+
+      <rect x="687" y="446" width="100" height="22" rx="3" fill="#065f46" stroke="#10b981" stroke-width="1"/>
+      <text x="737" y="461" fill="#6ee7b7" font-size="8" text-anchor="middle">Pod: worker-N</text>
+
+      <!-- ===== Network Layer ===== -->
+      <rect x="20" y="490" width="960" height="90" rx="8" fill="#1a1a2e" stroke="#f6ad55" stroke-width="1.5"/>
+      <text x="40" y="513" fill="#f6ad55" font-size="13" font-weight="bold">Network Fabric</text>
+
+      <!-- Management network -->
+      <rect x="40" y="523" width="250" height="42" rx="5" fill="#14532d" stroke="#4ade80" stroke-width="1"/>
+      <text x="165" y="542" fill="#4ade80" font-size="10" text-anchor="middle" font-weight="bold">Management Network (25 GbE)</text>
+      <text x="165" y="556" fill="#86efac" font-size="9" text-anchor="middle">Calico/Cilium CNI | K8s API | Metrics</text>
+
+      <!-- Data plane -->
+      <rect x="310" y="523" width="350" height="42" rx="5" fill="#7c2d12" stroke="#fb923c" stroke-width="1"/>
+      <text x="485" y="542" fill="#fb923c" font-size="10" text-anchor="middle" font-weight="bold">High-Performance Data Plane (400G IB/RoCE)</text>
+      <text x="485" y="556" fill="#fdba74" font-size="9" text-anchor="middle">SR-IOV + Multus CNI | NCCL Collectives | GPUDirect RDMA</text>
+
+      <!-- Storage network -->
+      <rect x="680" y="523" width="280" height="42" rx="5" fill="#312e81" stroke="#818cf8" stroke-width="1"/>
+      <text x="820" y="542" fill="#818cf8" font-size="10" text-anchor="middle" font-weight="bold">Storage Network (100-400G)</text>
+      <text x="820" y="556" fill="#a5b4fc" font-size="9" text-anchor="middle">Lustre / GPFS / NFS | PVCs</text>
+
+      <!-- ===== Storage Layer ===== -->
+      <rect x="20" y="598" width="960" height="85" rx="8" fill="#1a202c" stroke="#818cf8" stroke-width="1.5"/>
+      <text x="40" y="621" fill="#818cf8" font-size="13" font-weight="bold">Persistent Storage</text>
+
+      <rect x="40" y="633" width="200" height="35" rx="5" fill="#312e81" stroke="#818cf8" stroke-width="1"/>
+      <text x="140" y="655" fill="#c7d2fe" font-size="10" text-anchor="middle">Lustre (Training Data)</text>
+
+      <rect x="260" y="633" width="200" height="35" rx="5" fill="#312e81" stroke="#818cf8" stroke-width="1"/>
+      <text x="360" y="655" fill="#c7d2fe" font-size="10" text-anchor="middle">GPFS (Checkpoints)</text>
+
+      <rect x="480" y="633" width="200" height="35" rx="5" fill="#312e81" stroke="#818cf8" stroke-width="1"/>
+      <text x="580" y="655" fill="#c7d2fe" font-size="10" text-anchor="middle">NFS (Home Dirs / Code)</text>
+
+      <rect x="700" y="633" width="260" height="35" rx="5" fill="#312e81" stroke="#818cf8" stroke-width="1"/>
+      <text x="830" y="655" fill="#c7d2fe" font-size="10" text-anchor="middle">Container Registry (nvcr.io)</text>
+
+      <!-- Connection lines: Control plane to nodes -->
+      <line x1="105" y1="140" x2="175" y2="180" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3,2"/>
+      <line x1="375" y1="140" x2="500" y2="180" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3,2"/>
+      <line x1="690" y1="140" x2="825" y2="180" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3,2"/>
+
+      <!-- Connection lines: Nodes to networks -->
+      <line x1="175" y1="475" x2="165" y2="523" stroke="#4ade80" stroke-width="1.5"/>
+      <line x1="175" y1="475" x2="400" y2="523" stroke="#fb923c" stroke-width="1.5"/>
+      <line x1="500" y1="475" x2="165" y2="523" stroke="#4ade80" stroke-width="1.5"/>
+      <line x1="500" y1="475" x2="485" y2="523" stroke="#fb923c" stroke-width="1.5"/>
+      <line x1="500" y1="475" x2="820" y2="523" stroke="#818cf8" stroke-width="1"/>
+      <line x1="175" y1="475" x2="820" y2="523" stroke="#818cf8" stroke-width="1"/>
+
+      <!-- Network to storage -->
+      <line x1="820" y1="565" x2="820" y2="598" stroke="#818cf8" stroke-width="1.5"/>
+    </svg>
+  </div>
+
+  <!-- ============================================================
+       SUMMARY CARD
+       ============================================================ -->
+  <div class="info-card" style="border-left: 4px solid #76b900;">
+    <h4>Orchestration Stack Summary</h4>
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Component</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Container Runtime</strong></td>
+            <td>containerd + nvidia-container-runtime</td>
+            <td>GPU device injection into containers via OCI hooks or CDI</td>
+          </tr>
+          <tr>
+            <td><strong>Device Management</strong></td>
+            <td>NVIDIA GPU Operator (ClusterPolicy CRD)</td>
+            <td>Automated driver, toolkit, device plugin, DCGM, GFD, MIG deployment</td>
+          </tr>
+          <tr>
+            <td><strong>Network Management</strong></td>
+            <td>NVIDIA Network Operator + Multus + SR-IOV</td>
+            <td>RDMA-capable secondary interfaces for NCCL, GPUDirect RDMA</td>
+          </tr>
+          <tr>
+            <td><strong>Scheduling</strong></td>
+            <td>kube-scheduler + Volcano / Kueue</td>
+            <td>Gang scheduling, fair-share queuing, priority/preemption</td>
+          </tr>
+          <tr>
+            <td><strong>Training Jobs</strong></td>
+            <td>Kubeflow Training Operator (PyTorchJob)</td>
+            <td>Declarative distributed training with auto-configured env vars</td>
+          </tr>
+          <tr>
+            <td><strong>Networking (Mgmt)</strong></td>
+            <td>Calico/Cilium + MetalLB + NGINX Ingress</td>
+            <td>Pod networking, load balancing, ingress routing, NetworkPolicy</td>
+          </tr>
+          <tr>
+            <td><strong>Lifecycle</strong></td>
+            <td>Cluster API + ArgoCD + Ansible</td>
+            <td>Bare-metal provisioning, K8s lifecycle, GitOps-driven config</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       QUIZ SECTION
+       ============================================================ -->
+  <div class="quiz-section" id="orchestration-quiz">
+    <h3>Knowledge Check</h3>
+
+    <!-- Quiz Question 1 -->
+    <div class="quiz-question" data-question="orch-q1">
+      <h4>Question 1: GPU Resource Scheduling</h4>
+      <p>In a Kubernetes cluster with the NVIDIA Device Plugin, a pod spec requests <code>nvidia.com/gpu: 4</code> in its resource limits. A DGX H100 node currently has 3 GPUs free (5 are allocated to other pods). What happens when the scheduler tries to place this pod?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="orch-q1" value="a">
+          <span>The pod is scheduled on the node with 3 GPUs, and the remaining 1 GPU request is ignored.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q1" value="b">
+          <span>The pod remains in Pending state until a node with at least 4 free GPUs is available, because GPU resources cannot be overcommitted or fractionally allocated.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q1" value="c">
+          <span>The pod is scheduled with 3 GPUs and time-slices the 4th GPU with another pod.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q1" value="d">
+          <span>The scheduler evicts a lower-priority pod to free up the 4th GPU automatically.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" data-correct="b">
+        <p><strong>Correct Answer: B.</strong> Extended resources like <code>nvidia.com/gpu</code> are integer-only and cannot be overcommitted. The pod stays <em>Pending</em> until a node has at least 4 allocatable GPUs. Unlike CPU and memory, GPUs have no overcommit or fractional scheduling (unless MIG or time-slicing is explicitly configured). Preemption (option D) only occurs if the pod has a higher <code>PriorityClass</code> than existing pods AND <code>preemptionPolicy: PreemptLowerPriority</code> is set &mdash; it is not automatic without these configurations.</p>
+      </div>
+    </div>
+
+    <!-- Quiz Question 2 -->
+    <div class="quiz-question" data-question="orch-q2">
+      <h4>Question 2: Gang Scheduling</h4>
+      <p>A distributed PyTorchJob requires 32 workers, each needing 8 GPUs (256 total GPUs). The cluster currently has 240 free GPUs across 30 nodes. Without gang scheduling (using the default kube-scheduler), what problem is most likely to occur?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="orch-q2" value="a">
+          <span>The job runs successfully with 30 workers and skips the 2 missing workers.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q2" value="b">
+          <span>The default scheduler automatically queues the job until 256 GPUs are available.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q2" value="c">
+          <span>30 worker pods are scheduled and start, but NCCL initialization hangs indefinitely waiting for all 32 ranks to join the rendezvous. The 2 remaining pods stay Pending, consuming 240 GPUs productively doing nothing.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q2" value="d">
+          <span>Kubernetes automatically scales the cluster to add 2 more nodes.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" data-correct="c">
+        <p><strong>Correct Answer: C.</strong> This is the classic partial-scheduling deadlock problem that gang scheduling solves. The default kube-scheduler places pods independently &mdash; it schedules 30 of 32 worker pods on available nodes. These 30 workers start and call <code>torch.distributed.init_process_group()</code>, which blocks waiting for all 32 ranks to join. The 2 remaining pods stay Pending because there aren't enough GPUs. The result: 240 GPUs are locked up doing nothing. Gang schedulers like Volcano or Kueue enforce all-or-nothing: either all 32 pods can be placed, or none are admitted.</p>
+      </div>
+    </div>
+
+    <!-- Quiz Question 3 -->
+    <div class="quiz-question" data-question="orch-q3">
+      <h4>Question 3: GPU Operator Components</h4>
+      <p>A new DGX H100 node is added to a Kubernetes cluster running the NVIDIA GPU Operator. Which sequence correctly describes what happens automatically?</p>
+      <div class="quiz-options">
+        <label class="quiz-option">
+          <input type="radio" name="orch-q3" value="a">
+          <span>The admin must SSH into the node, install NVIDIA drivers, then install the device plugin manually before GPUs appear in the cluster.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q3" value="b">
+          <span>The GPU Operator's DaemonSets automatically deploy: (1) NVIDIA driver container compiles and loads kernel modules, (2) Container Toolkit configures containerd for GPU support, (3) Device Plugin discovers 8 GPUs and registers them with kubelet, (4) GPU Feature Discovery labels the node with H100 metadata, (5) DCGM Exporter begins publishing GPU metrics, (6) Operator Validator confirms the stack is functional.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q3" value="c">
+          <span>Kubernetes automatically detects GPUs through the Linux device tree without any operator or plugin.</span>
+        </label>
+        <label class="quiz-option">
+          <input type="radio" name="orch-q3" value="d">
+          <span>The GPU Operator only installs the device plugin; drivers must be pre-installed on the host OS.</span>
+        </label>
+      </div>
+      <div class="quiz-answer" data-correct="b">
+        <p><strong>Correct Answer: B.</strong> This is the core value of the GPU Operator &mdash; fully automated, zero-touch GPU stack provisioning. When a new node joins the cluster and matches the GPU Operator's node selector, each DaemonSet component rolls out in dependency order: the driver container first (it compiles the kernel module against the running kernel or uses a pre-compiled driver), then the toolkit configures the container runtime, then the device plugin exposes GPUs to the scheduler, GFD labels the node, and DCGM begins monitoring. The entire process is governed by the <code>ClusterPolicy</code> CRD and takes 2-5 minutes depending on whether drivers need compilation. Option D is partially true &mdash; you <em>can</em> configure the operator with <code>driver.enabled: false</code> if you pre-install drivers, but by default, the operator manages the full stack including drivers.</p>
+      </div>
+    </div>
+  </div>
+
+</section>

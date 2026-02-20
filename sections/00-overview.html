@@ -1,0 +1,673 @@
+<section id="overview" class="content-section" data-layer="intro">
+
+  <!-- ============================================================
+       1. WELCOME HEADER
+       ============================================================ -->
+  <div class="section-header">
+    <h1 class="section-title">NVIDIA GPU SuperPOD: Complete Infrastructure Walkthrough</h1>
+    <p class="section-subtitle">From concrete floor to container orchestration &mdash; everything you need to know to be a GPU datacenter SRE</p>
+
+    <p class="intro-paragraph">
+      This interactive guide dismantles the full stack of an NVIDIA DGX SuperPOD, layer by
+      layer. You will follow the path electricity takes from the utility transformer to a
+      running distributed training job&mdash;touching power distribution, liquid cooling,
+      GPU hardware, InfiniBand fabric, network architecture, virtualization, parallel
+      storage, Kubernetes orchestration, and day-two operations. Every section includes
+      real-world reference numbers, topology diagrams, and a short self-assessment quiz so
+      you can validate your understanding before moving on.
+    </p>
+
+    <!-- Stats Banner -->
+    <div class="stats-banner">
+      <div class="stat-item">
+        <span class="stat-number">256</span>
+        <span class="stat-label">GPUs per SuperPOD</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-number">~1 EXAFLOP</span>
+        <span class="stat-label">FP8 Performance</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-number">10+</span>
+        <span class="stat-label">Layers of Technology</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-number">100+</span>
+        <span class="stat-label">Concepts Covered</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       2. INTERACTIVE TECH TREE / ROADMAP
+       ============================================================ -->
+  <div class="tech-tree">
+    <h2>Infrastructure Tech Tree</h2>
+    <p class="tech-tree-intro">Click any node to jump directly to that topic. Layers are presented bottom-up, from the physical facility to day-two operations.</p>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 800 1600" xmlns="http://www.w3.org/2000/svg" class="tech-tree-svg" role="img" aria-label="Interactive technology tree showing all SuperPOD infrastructure layers">
+        <defs>
+          <!-- Layer color definitions for reuse -->
+          <linearGradient id="grad-layer0" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#ff6b6b;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#ee5a5a;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#ffd93d;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#f0c830;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer2" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#6bcb77;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#5ab868;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer3" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#4d96ff;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#3d86ef;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer4" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#9b59b6;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#8a48a5;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer5" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#e67e22;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#d57118;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer6" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#1abc9c;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#16a085;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="grad-layer7" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#e74c3c;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#c0392b;stop-opacity:1" />
+          </linearGradient>
+
+          <!-- Drop shadow filter -->
+          <filter id="node-shadow" x="-4%" y="-4%" width="108%" height="112%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.18" />
+          </filter>
+
+          <!-- Glow filter for hover state (applied via CSS) -->
+          <filter id="node-glow" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <!-- ==================== CONNECTOR LINES ==================== -->
+        <!-- Vertical trunk line -->
+        <line x1="400" y1="105" x2="400" y2="1520" stroke="#3a3f4b" stroke-width="2" stroke-dasharray="6,4" opacity="0.35" />
+
+        <!-- Layer 0 to Layer 1 connector -->
+        <path d="M 400 145 L 400 175" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+        <!-- Layer 1 to Layer 2 connector -->
+        <path d="M 400 335 L 400 365" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+        <!-- Layer 2 to Layer 3 connector -->
+        <path d="M 400 525 L 400 555" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+        <!-- Layer 3 to Layer 4 connector -->
+        <path d="M 400 735 L 400 765" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+        <!-- Layer 4 to Layer 5 connector -->
+        <path d="M 400 955 L 400 985" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+        <!-- Layer 5 to Layer 6 connector -->
+        <path d="M 400 1145 L 400 1175" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+        <!-- Layer 6 to Layer 7 connector -->
+        <path d="M 400 1335 L 400 1365" stroke="#3a3f4b" stroke-width="2" opacity="0.4" />
+
+        <!-- Layer 0 branch lines -->
+        <path d="M 400 105 L 200 125" stroke="#ff6b6b" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 105 L 400 125" stroke="#ff6b6b" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 105 L 600 125" stroke="#ff6b6b" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 1 branch lines -->
+        <path d="M 400 295 L 140 315" stroke="#ffd93d" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 295 L 335 315" stroke="#ffd93d" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 295 L 510 315" stroke="#ffd93d" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 295 L 680 315" stroke="#ffd93d" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 2 branch lines -->
+        <path d="M 400 485 L 140 505" stroke="#6bcb77" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 485 L 335 505" stroke="#6bcb77" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 485 L 510 505" stroke="#6bcb77" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 485 L 680 505" stroke="#6bcb77" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 3 branch lines -->
+        <path d="M 400 675 L 100 695" stroke="#4d96ff" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 675 L 250 695" stroke="#4d96ff" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 675 L 400 695" stroke="#4d96ff" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 675 L 520 695" stroke="#4d96ff" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 675 L 630 695" stroke="#4d96ff" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 675 L 730 695" stroke="#4d96ff" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 4 branch lines -->
+        <path d="M 400 885 L 100 905" stroke="#9b59b6" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 885 L 250 905" stroke="#9b59b6" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 885 L 380 905" stroke="#9b59b6" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 885 L 500 905" stroke="#9b59b6" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 885 L 610 905" stroke="#9b59b6" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 885 L 720 905" stroke="#9b59b6" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 5 branch lines -->
+        <path d="M 400 1075 L 155 1095" stroke="#e67e22" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1075 L 350 1095" stroke="#e67e22" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1075 L 490 1095" stroke="#e67e22" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1075 L 660 1095" stroke="#e67e22" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 6 branch lines -->
+        <path d="M 400 1265 L 140 1285" stroke="#1abc9c" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1265 L 335 1285" stroke="#1abc9c" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1265 L 510 1285" stroke="#1abc9c" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1265 L 680 1285" stroke="#1abc9c" stroke-width="1.5" opacity="0.5" />
+
+        <!-- Layer 7 branch lines -->
+        <path d="M 400 1455 L 140 1475" stroke="#e74c3c" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1455 L 335 1475" stroke="#e74c3c" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1455 L 510 1475" stroke="#e74c3c" stroke-width="1.5" opacity="0.5" />
+        <path d="M 400 1455 L 680 1475" stroke="#e74c3c" stroke-width="1.5" opacity="0.5" />
+
+
+        <!-- ==================== LAYER 0: PHYSICAL INFRASTRUCTURE ==================== -->
+        <!-- Layer badge -->
+        <rect x="300" y="18" width="200" height="32" rx="16" fill="#ff6b6b" opacity="0.15" />
+        <text x="400" y="39" text-anchor="middle" fill="#ff6b6b" font-size="13" font-weight="700" letter-spacing="1">LAYER 0</text>
+
+        <!-- Layer title node -->
+        <a href="#physical-infrastructure" class="tree-node" data-section="physical-infrastructure" data-layer="0">
+          <rect x="260" y="56" width="280" height="44" rx="10" fill="url(#grad-layer0)" filter="url(#node-shadow)" />
+          <text x="400" y="83" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Physical Infrastructure</text>
+          <title>Layer 0 -- Facility power, cooling, and physical design</title>
+        </a>
+
+        <!-- Child nodes -->
+        <a href="#power-distribution" class="tree-node" data-section="power-distribution" data-layer="0">
+          <rect x="110" y="118" width="180" height="36" rx="8" fill="url(#grad-layer0)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="200" y="141" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Power Distribution</text>
+          <title>Utility feed, transformers, PDUs, UPS, and bus bars</title>
+        </a>
+        <a href="#cooling-systems" class="tree-node" data-section="cooling-systems" data-layer="0">
+          <rect x="310" y="118" width="180" height="36" rx="8" fill="url(#grad-layer0)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="400" y="141" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Cooling Systems</text>
+          <title>Direct liquid cooling (DLC), CDUs, rear-door heat exchangers</title>
+        </a>
+        <a href="#facility-design" class="tree-node" data-section="facility-design" data-layer="0">
+          <rect x="510" y="118" width="180" height="36" rx="8" fill="url(#grad-layer0)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="600" y="141" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Facility Design</text>
+          <title>Raised floor, hot/cold aisle, structural load, fire suppression</title>
+        </a>
+
+
+        <!-- ==================== LAYER 1: HARDWARE ==================== -->
+        <rect x="300" y="190" width="200" height="32" rx="16" fill="#ffd93d" opacity="0.15" />
+        <text x="400" y="211" text-anchor="middle" fill="#ffd93d" font-size="13" font-weight="700" letter-spacing="1">LAYER 1</text>
+
+        <a href="#hardware" class="tree-node" data-section="hardware" data-layer="1">
+          <rect x="295" y="228" width="210" height="44" rx="10" fill="url(#grad-layer1)" filter="url(#node-shadow)" />
+          <text x="400" y="255" text-anchor="middle" fill="#333" font-size="15" font-weight="700">Hardware</text>
+          <title>Layer 1 -- DGX systems, GPUs, NVLink, and DPUs</title>
+        </a>
+
+        <a href="#dgx-hgx-systems" class="tree-node" data-section="dgx-hgx-systems" data-layer="1">
+          <rect x="50" y="308" width="180" height="36" rx="8" fill="url(#grad-layer1)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="140" y="331" text-anchor="middle" fill="#333" font-size="12" font-weight="600">DGX / HGX Systems</text>
+          <title>NVIDIA DGX H100, HGX baseboards, and system architecture</title>
+        </a>
+        <a href="#gpu-architecture" class="tree-node" data-section="gpu-architecture" data-layer="1">
+          <rect x="245" y="308" width="180" height="36" rx="8" fill="url(#grad-layer1)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="335" y="331" text-anchor="middle" fill="#333" font-size="12" font-weight="600">GPU Architecture (H100)</text>
+          <title>Hopper GH100 die, SMs, Tensor Cores, HBM3, TDP 700W</title>
+        </a>
+        <a href="#nvlink-nvswitch" class="tree-node" data-section="nvlink-nvswitch" data-layer="1">
+          <rect x="440" y="308" width="150" height="36" rx="8" fill="url(#grad-layer1)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="515" y="331" text-anchor="middle" fill="#333" font-size="12" font-weight="600">NVLink / NVSwitch</text>
+          <title>NVLink 4.0 at 900 GB/s bidirectional, NVSwitch 3.0</title>
+        </a>
+        <a href="#bluefield-dpu" class="tree-node" data-section="bluefield-dpu" data-layer="1">
+          <rect x="605" y="308" width="150" height="36" rx="8" fill="url(#grad-layer1)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="680" y="331" text-anchor="middle" fill="#333" font-size="12" font-weight="600">BlueField DPU</text>
+          <title>BlueField-3 data processing unit for network offload</title>
+        </a>
+
+
+        <!-- ==================== LAYER 2: PHYSICAL NETWORKING ==================== -->
+        <rect x="300" y="380" width="200" height="32" rx="16" fill="#6bcb77" opacity="0.15" />
+        <text x="400" y="401" text-anchor="middle" fill="#6bcb77" font-size="13" font-weight="700" letter-spacing="1">LAYER 2</text>
+
+        <a href="#physical-networking" class="tree-node" data-section="physical-networking" data-layer="2">
+          <rect x="280" y="418" width="240" height="44" rx="10" fill="url(#grad-layer2)" filter="url(#node-shadow)" />
+          <text x="400" y="445" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Physical Networking</text>
+          <title>Layer 2 -- InfiniBand, RoCE, cables, and GPUDirect</title>
+        </a>
+
+        <a href="#infiniband" class="tree-node" data-section="infiniband" data-layer="2">
+          <rect x="50" y="498" width="180" height="36" rx="8" fill="url(#grad-layer2)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="140" y="521" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">InfiniBand (NDR 400G)</text>
+          <title>InfiniBand NDR: 400 Gb/s, 4x 100G lanes, sub-microsecond latency</title>
+        </a>
+        <a href="#roce" class="tree-node" data-section="roce" data-layer="2">
+          <rect x="245" y="498" width="180" height="36" rx="8" fill="url(#grad-layer2)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="335" y="521" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">RoCE (RDMA/Ethernet)</text>
+          <title>RDMA over Converged Ethernet v2, PFC, ECN, DCQCN</title>
+        </a>
+        <a href="#cables-transceivers" class="tree-node" data-section="cables-transceivers" data-layer="2">
+          <rect x="440" y="498" width="150" height="36" rx="8" fill="url(#grad-layer2)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="515" y="521" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">Cables &amp; Transceivers</text>
+          <title>DAC, AOC, QSFP-DD, OSFP, fiber types, and cable management</title>
+        </a>
+        <a href="#gpudirect" class="tree-node" data-section="gpudirect" data-layer="2">
+          <rect x="605" y="498" width="150" height="36" rx="8" fill="url(#grad-layer2)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="680" y="521" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">GPUDirect</text>
+          <title>GPUDirect RDMA, Storage, and Peer-to-Peer for zero-copy transfers</title>
+        </a>
+
+
+        <!-- ==================== LAYER 3: NETWORK ARCHITECTURE ==================== -->
+        <rect x="300" y="570" width="200" height="32" rx="16" fill="#4d96ff" opacity="0.15" />
+        <text x="400" y="591" text-anchor="middle" fill="#4d96ff" font-size="13" font-weight="700" letter-spacing="1">LAYER 3</text>
+
+        <a href="#network-architecture" class="tree-node" data-section="network-architecture" data-layer="3">
+          <rect x="270" y="608" width="260" height="44" rx="10" fill="url(#grad-layer3)" filter="url(#node-shadow)" />
+          <text x="400" y="635" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Network Architecture</text>
+          <title>Layer 3 -- Spine-leaf, traffic patterns, BGP, and redundancy</title>
+        </a>
+
+        <a href="#spine-leaf-topology" class="tree-node" data-section="spine-leaf-topology" data-layer="3">
+          <rect x="20" y="688" width="160" height="36" rx="8" fill="url(#grad-layer3)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="100" y="711" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">Spine-Leaf Topology</text>
+          <title>Non-blocking Clos fabric, equal-cost multipath, full bisection bandwidth</title>
+        </a>
+        <a href="#east-west-traffic" class="tree-node" data-section="east-west-traffic" data-layer="3">
+          <rect x="190" y="688" width="130" height="36" rx="8" fill="url(#grad-layer3)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="255" y="711" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">East-West Traffic</text>
+          <title>Server-to-server traffic within the datacenter, dominant in HPC</title>
+        </a>
+        <a href="#north-south-traffic" class="tree-node" data-section="north-south-traffic" data-layer="3">
+          <rect x="330" y="688" width="140" height="36" rx="8" fill="url(#grad-layer3)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="400" y="711" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">North-South Traffic</text>
+          <title>Ingress/egress traffic between the datacenter and external networks</title>
+        </a>
+        <a href="#bgp-routing" class="tree-node" data-section="bgp-routing" data-layer="3">
+          <rect x="480" y="688" width="100" height="36" rx="8" fill="url(#grad-layer3)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="530" y="711" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">BGP / Routing</text>
+          <title>eBGP underlay, TCP 179, ASN design, route reflectors</title>
+        </a>
+        <a href="#blended-isp" class="tree-node" data-section="blended-isp" data-layer="3">
+          <rect x="590" y="688" width="100" height="36" rx="8" fill="url(#grad-layer3)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="640" y="711" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">Blended ISP</text>
+          <title>Multi-homed upstream transit, peering, and traffic engineering</title>
+        </a>
+        <a href="#redundancy-mlag" class="tree-node" data-section="redundancy-mlag" data-layer="3">
+          <rect x="700" y="688" width="90" height="36" rx="8" fill="url(#grad-layer3)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="745" y="711" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">MLAG / LACP</text>
+          <title>Multi-chassis link aggregation, LACP bonding, redundancy design</title>
+        </a>
+
+
+        <!-- ==================== LAYER 4: VIRTUALIZATION ==================== -->
+        <rect x="300" y="770" width="200" height="32" rx="16" fill="#9b59b6" opacity="0.15" />
+        <text x="400" y="791" text-anchor="middle" fill="#9b59b6" font-size="13" font-weight="700" letter-spacing="1">LAYER 4</text>
+
+        <a href="#virtualization" class="tree-node" data-section="virtualization" data-layer="4">
+          <rect x="290" y="808" width="220" height="44" rx="10" fill="url(#grad-layer4)" filter="url(#node-shadow)" />
+          <text x="400" y="835" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Virtualization</text>
+          <title>Layer 4 -- QEMU/KVM, GPU passthrough, SR-IOV, MIG, and overlays</title>
+        </a>
+
+        <a href="#qemu-kvm" class="tree-node" data-section="qemu-kvm" data-layer="4">
+          <rect x="20" y="898" width="160" height="36" rx="8" fill="url(#grad-layer4)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="100" y="921" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">QEMU / KVM</text>
+          <title>Hardware-assisted virtualization with KVM hypervisor and QEMU emulation</title>
+        </a>
+        <a href="#vfio-passthrough" class="tree-node" data-section="vfio-passthrough" data-layer="4">
+          <rect x="190" y="898" width="140" height="36" rx="8" fill="url(#grad-layer4)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="260" y="921" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">VFIO Passthrough</text>
+          <title>PCIe device passthrough via VFIO for near-native GPU performance</title>
+        </a>
+        <a href="#sr-iov" class="tree-node" data-section="sr-iov" data-layer="4">
+          <rect x="340" y="898" width="90" height="36" rx="8" fill="url(#grad-layer4)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="385" y="921" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">SR-IOV</text>
+          <title>Single Root I/O Virtualization for NIC and GPU partitioning</title>
+        </a>
+        <a href="#mig" class="tree-node" data-section="mig" data-layer="4">
+          <rect x="440" y="898" width="130" height="36" rx="8" fill="url(#grad-layer4)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="505" y="921" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">MIG (Multi-GPU)</text>
+          <title>Multi-Instance GPU: partition one H100 into up to 7 isolated instances</title>
+        </a>
+        <a href="#ovs" class="tree-node" data-section="ovs" data-layer="4">
+          <rect x="580" y="898" width="90" height="36" rx="8" fill="url(#grad-layer4)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="625" y="921" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">OVS</text>
+          <title>Open vSwitch for virtual network switching with OpenFlow</title>
+        </a>
+        <a href="#vxlan" class="tree-node" data-section="vxlan" data-layer="4">
+          <rect x="680" y="898" width="110" height="36" rx="8" fill="url(#grad-layer4)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="735" y="921" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">VXLAN Overlays</text>
+          <title>VXLAN: 24-bit VNI, 16M segments, UDP 4789 encapsulation</title>
+        </a>
+
+
+        <!-- ==================== LAYER 5: STORAGE ==================== -->
+        <rect x="300" y="980" width="200" height="32" rx="16" fill="#e67e22" opacity="0.15" />
+        <text x="400" y="1001" text-anchor="middle" fill="#e67e22" font-size="13" font-weight="700" letter-spacing="1">LAYER 5</text>
+
+        <a href="#storage" class="tree-node" data-section="storage" data-layer="5">
+          <rect x="310" y="1018" width="180" height="44" rx="10" fill="url(#grad-layer5)" filter="url(#node-shadow)" />
+          <text x="400" y="1045" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Storage</text>
+          <title>Layer 5 -- Parallel filesystems, NVMe-oF, Ceph, NAS/SAN</title>
+        </a>
+
+        <a href="#parallel-filesystems" class="tree-node" data-section="parallel-filesystems" data-layer="5">
+          <rect x="55" y="1088" width="200" height="36" rx="8" fill="url(#grad-layer5)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="155" y="1111" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">Parallel FS (Lustre/Weka)</text>
+          <title>Lustre and WekaFS for high-throughput parallel I/O across thousands of clients</title>
+        </a>
+        <a href="#nvme-of" class="tree-node" data-section="nvme-of" data-layer="5">
+          <rect x="270" y="1088" width="150" height="36" rx="8" fill="url(#grad-layer5)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="345" y="1111" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">NVMe-oF</text>
+          <title>NVMe over Fabrics for remote flash storage at near-local latency</title>
+        </a>
+        <a href="#ceph" class="tree-node" data-section="ceph" data-layer="5">
+          <rect x="435" y="1088" width="110" height="36" rx="8" fill="url(#grad-layer5)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="490" y="1111" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Ceph</text>
+          <title>Software-defined storage with CRUSH algorithm, block/object/file interfaces</title>
+        </a>
+        <a href="#nas-san" class="tree-node" data-section="nas-san" data-layer="5">
+          <rect x="560" y="1088" width="180" height="36" rx="8" fill="url(#grad-layer5)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="650" y="1111" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">NAS / SAN</text>
+          <title>Network-attached and storage area network appliances, iSCSI, FC</title>
+        </a>
+
+
+        <!-- ==================== LAYER 6: ORCHESTRATION ==================== -->
+        <rect x="300" y="1170" width="200" height="32" rx="16" fill="#1abc9c" opacity="0.15" />
+        <text x="400" y="1191" text-anchor="middle" fill="#1abc9c" font-size="13" font-weight="700" letter-spacing="1">LAYER 6</text>
+
+        <a href="#orchestration" class="tree-node" data-section="orchestration" data-layer="6">
+          <rect x="285" y="1208" width="230" height="44" rx="10" fill="url(#grad-layer6)" filter="url(#node-shadow)" />
+          <text x="400" y="1235" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Orchestration</text>
+          <title>Layer 6 -- Kubernetes, GPU Operator, NCCL, job scheduling</title>
+        </a>
+
+        <a href="#kubernetes-gpu-operator" class="tree-node" data-section="kubernetes-gpu-operator" data-layer="6">
+          <rect x="40" y="1278" width="200" height="36" rx="8" fill="url(#grad-layer6)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="140" y="1301" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">K8s + GPU Operator</text>
+          <title>Kubernetes with NVIDIA GPU Operator for automated driver and plugin lifecycle</title>
+        </a>
+        <a href="#nccl" class="tree-node" data-section="nccl" data-layer="6">
+          <rect x="255" y="1278" width="160" height="36" rx="8" fill="url(#grad-layer6)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="335" y="1301" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">NCCL / Dist. Training</text>
+          <title>NVIDIA Collective Communications Library for multi-GPU and multi-node training</title>
+        </a>
+        <a href="#network-operator" class="tree-node" data-section="network-operator" data-layer="6">
+          <rect x="430" y="1278" width="160" height="36" rx="8" fill="url(#grad-layer6)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="510" y="1301" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">Network Operator</text>
+          <title>NVIDIA Network Operator for RDMA, SR-IOV, and host networking in K8s</title>
+        </a>
+        <a href="#job-scheduling" class="tree-node" data-section="job-scheduling" data-layer="6">
+          <rect x="605" y="1278" width="150" height="36" rx="8" fill="url(#grad-layer6)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="680" y="1301" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Job Scheduling</text>
+          <title>Slurm, Volcano, Run:ai, and gang scheduling for GPU workloads</title>
+        </a>
+
+
+        <!-- ==================== LAYER 7: OPERATIONS ==================== -->
+        <rect x="300" y="1360" width="200" height="32" rx="16" fill="#e74c3c" opacity="0.15" />
+        <text x="400" y="1381" text-anchor="middle" fill="#e74c3c" font-size="13" font-weight="700" letter-spacing="1">LAYER 7</text>
+
+        <a href="#operations" class="tree-node" data-section="operations" data-layer="7">
+          <rect x="300" y="1398" width="200" height="44" rx="10" fill="url(#grad-layer7)" filter="url(#node-shadow)" />
+          <text x="400" y="1425" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Operations</text>
+          <title>Layer 7 -- Monitoring, observability, BMC/IPMI, SRE practices</title>
+        </a>
+
+        <a href="#dcgm-monitoring" class="tree-node" data-section="dcgm-monitoring" data-layer="7">
+          <rect x="40" y="1468" width="200" height="36" rx="8" fill="url(#grad-layer7)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="140" y="1491" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">DCGM / GPU Monitoring</text>
+          <title>NVIDIA Data Center GPU Manager for health checks, diagnostics, and telemetry</title>
+        </a>
+        <a href="#prometheus-grafana" class="tree-node" data-section="prometheus-grafana" data-layer="7">
+          <rect x="255" y="1468" width="160" height="36" rx="8" fill="url(#grad-layer7)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="335" y="1491" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">Prometheus / Grafana</text>
+          <title>Time-series metrics collection and dashboard visualization</title>
+        </a>
+        <a href="#bmc-ipmi-redfish" class="tree-node" data-section="bmc-ipmi-redfish" data-layer="7">
+          <rect x="430" y="1468" width="160" height="36" rx="8" fill="url(#grad-layer7)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="510" y="1491" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">BMC / IPMI / Redfish</text>
+          <title>Baseboard management for remote power, console, and firmware updates</title>
+        </a>
+        <a href="#sre-practices" class="tree-node" data-section="sre-practices" data-layer="7">
+          <rect x="605" y="1468" width="150" height="36" rx="8" fill="url(#grad-layer7)" filter="url(#node-shadow)" opacity="0.88" />
+          <text x="680" y="1491" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">SRE Practices</text>
+          <title>SLOs, error budgets, incident response, capacity planning, runbooks</title>
+        </a>
+
+        <!-- Bottom cap decoration -->
+        <circle cx="400" cy="1545" r="8" fill="none" stroke="#3a3f4b" stroke-width="2" opacity="0.3" />
+        <circle cx="400" cy="1545" r="3" fill="#3a3f4b" opacity="0.3" />
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       3. HOW TO USE THIS GUIDE
+       ============================================================ -->
+  <div class="info-card" id="how-to-use">
+    <h2>How to Use This Guide</h2>
+
+    <div class="callout callout-info">
+      <h3>Navigation</h3>
+      <p>
+        Use the sidebar table of contents or the tech tree above to jump to any layer.
+        Each layer builds on the one below it, so reading top-to-bottom gives you the
+        full picture&mdash;but feel free to skip to the topics most relevant to your role.
+      </p>
+    </div>
+
+    <div class="callout callout-tip">
+      <h3>Expandable Deep Dives</h3>
+      <p>
+        Throughout the guide you will find <strong>collapsible sections</strong> marked with
+        a &ldquo;Deep Dive&rdquo; label. These contain extended explanations, vendor-specific
+        details, and worked examples. Click to expand them when you want more depth; skip
+        them on a first read if you are looking for a high-level overview.
+      </p>
+    </div>
+
+    <div class="callout callout-quiz">
+      <h3>Knowledge Checks</h3>
+      <p>
+        Every section ends with a short interactive quiz. These are self-assessment
+        only&mdash;no scores are stored. They are designed to reinforce the key facts an
+        SRE is most likely to need during an incident or capacity planning exercise.
+      </p>
+    </div>
+
+    <div class="callout callout-keyboard">
+      <h3>Keyboard Shortcuts</h3>
+      <table class="shortcuts-table">
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><kbd>J</kbd> / <kbd>K</kbd></td>
+            <td>Next / previous section</td>
+          </tr>
+          <tr>
+            <td><kbd>S</kbd></td>
+            <td>Toggle sidebar</td>
+          </tr>
+          <tr>
+            <td><kbd>T</kbd></td>
+            <td>Back to top (this overview)</td>
+          </tr>
+          <tr>
+            <td><kbd>D</kbd></td>
+            <td>Toggle dark / light mode</td>
+          </tr>
+          <tr>
+            <td><kbd>/</kbd></td>
+            <td>Focus search bar</td>
+          </tr>
+          <tr>
+            <td><kbd>Esc</kbd></td>
+            <td>Close modal / unfocus search</td>
+          </tr>
+          <tr>
+            <td><kbd>?</kbd></td>
+            <td>Show keyboard shortcut help</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       4. PREREQUISITES
+       ============================================================ -->
+  <div class="info-card" id="prerequisites">
+    <h2>Prerequisites</h2>
+    <p>This guide assumes you have a working familiarity with the following topics. If any of these feel unfamiliar, follow the linked resources before diving into the main content.</p>
+
+    <ul class="prereq-list">
+      <li>
+        <strong>Basic Linux Administration</strong>
+        <span class="prereq-detail">Comfortable with the shell, systemd services, package management, user permissions, and reading logs. You should be able to SSH into a server and troubleshoot a failed service without a GUI.</span>
+      </li>
+      <li>
+        <strong>Networking Fundamentals (TCP/IP, Subnetting)</strong>
+        <span class="prereq-detail">Understand the OSI model through Layer 4, IPv4 subnetting and CIDR notation, basic firewall rules, DNS resolution, and how a packet traverses a routed network.</span>
+      </li>
+      <li>
+        <strong>Basic Understanding of Virtualization</strong>
+        <span class="prereq-detail">Know what a hypervisor does, the difference between Type-1 and Type-2 virtualization, and why hardware-assisted virtualization (VT-x / AMD-V) matters for performance.</span>
+      </li>
+      <li>
+        <strong>Familiarity with Containers and Kubernetes Concepts</strong>
+        <span class="prereq-detail">Understand container images, container runtimes, pods, deployments, services, and namespaces. You do not need to be a Kubernetes expert&mdash;this guide will cover GPU-specific orchestration in depth.</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- ============================================================
+       5. QUICK REFERENCE: THE NUMBERS THAT MATTER
+       ============================================================ -->
+  <div class="info-card" id="quick-reference">
+    <h2>Quick Reference: The Numbers That Matter</h2>
+    <p>Pin this card to your mental dashboard. These are the specifications and thresholds that come up most often during capacity planning, incident triage, and architecture reviews.</p>
+
+    <div class="reference-grid">
+
+      <!-- GPU & Compute -->
+      <div class="reference-category">
+        <h3>GPU &amp; Compute</h3>
+        <table class="reference-table">
+          <tbody>
+            <tr>
+              <td class="ref-label">H100 SXM TDP</td>
+              <td class="ref-value">700 W</td>
+              <td class="ref-note">Max board power under sustained load</td>
+            </tr>
+            <tr>
+              <td class="ref-label">H100 HBM3 Capacity</td>
+              <td class="ref-value">80 GB</td>
+              <td class="ref-note">High Bandwidth Memory per GPU</td>
+            </tr>
+            <tr>
+              <td class="ref-label">H100 HBM3 Bandwidth</td>
+              <td class="ref-value">3.35 TB/s</td>
+              <td class="ref-note">Memory bandwidth per GPU</td>
+            </tr>
+            <tr>
+              <td class="ref-label">DGX H100 System Power</td>
+              <td class="ref-value">10.2 kW</td>
+              <td class="ref-note">Total system power (8 GPUs + CPUs + NICs)</td>
+            </tr>
+            <tr>
+              <td class="ref-label">SuperPOD Composition</td>
+              <td class="ref-value">32 DGX = 256 GPUs</td>
+              <td class="ref-note">One SuperPOD building block</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Interconnect -->
+      <div class="reference-category">
+        <h3>Interconnect</h3>
+        <table class="reference-table">
+          <tbody>
+            <tr>
+              <td class="ref-label">NVLink 4.0 Bandwidth</td>
+              <td class="ref-value">900 GB/s</td>
+              <td class="ref-note">Bidirectional, per GPU (18 links x 25 GB/s x 2)</td>
+            </tr>
+            <tr>
+              <td class="ref-label">ConnectX-7 Line Rate</td>
+              <td class="ref-value">400 Gb/s</td>
+              <td class="ref-note">Single-port InfiniBand NDR or Ethernet</td>
+            </tr>
+            <tr>
+              <td class="ref-label">InfiniBand NDR</td>
+              <td class="ref-value">400 Gb/s</td>
+              <td class="ref-note">4 lanes x 100 Gb/s per lane (PAM4)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Networking -->
+      <div class="reference-category">
+        <h3>Networking</h3>
+        <table class="reference-table">
+          <tbody>
+            <tr>
+              <td class="ref-label">BGP Port</td>
+              <td class="ref-value">TCP 179</td>
+              <td class="ref-note">Border Gateway Protocol well-known port</td>
+            </tr>
+            <tr>
+              <td class="ref-label">VXLAN VNI Range</td>
+              <td class="ref-value">24-bit (16M segments)</td>
+              <td class="ref-note">Virtual Network Identifier, UDP 4789</td>
+            </tr>
+            <tr>
+              <td class="ref-label">VXLAN UDP Port</td>
+              <td class="ref-value">4789</td>
+              <td class="ref-note">IANA-assigned destination port</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Facility -->
+      <div class="reference-category">
+        <h3>Facility</h3>
+        <table class="reference-table">
+          <tbody>
+            <tr>
+              <td class="ref-label">PUE Target</td>
+              <td class="ref-value">&lt; 1.3</td>
+              <td class="ref-note">Power Usage Effectiveness (1.0 = perfect)</td>
+            </tr>
+            <tr>
+              <td class="ref-label">DGX H100 Rack Power</td>
+              <td class="ref-value">~40 kW</td>
+              <td class="ref-note">Typical per-rack allocation (4 DGX nodes)</td>
+            </tr>
+            <tr>
+              <td class="ref-label">Inlet Temp (ASHRAE A1)</td>
+              <td class="ref-value">15 &ndash; 32 &deg;C</td>
+              <td class="ref-note">Recommended server inlet temperature range</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+</section>
