@@ -1,8 +1,11 @@
 <!-- Section 9: Monitoring & SRE -->
 <section id="monitoring-sre" class="content-section" data-layer="7">
   <div class="section-header">
-    <span class="section-number">09</span>
-    <h2>Monitoring &amp; Site Reliability Engineering</h2>
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="7">Layer 7</span>
+      <span class="section-number">09</span>
+    </div>
+    <h1 class="section-title">Monitoring &amp; Site Reliability Engineering</h1>
     <p class="section-subtitle">Observability, incident response, and operational excellence for GPU-scale infrastructure</p>
   </div>
 
@@ -401,131 +404,33 @@ dcgmi health -c -g 1
 dmesg -wH | grep --line-buffered "Xid"</code></pre>
 
     <h4>XID Error Troubleshooting Flowchart</h4>
-    <div class="diagram-container">
-      <svg viewBox="0 0 900 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="XID Error Troubleshooting Flowchart">
-        <style>
-          .xid-box { fill: #1a2332; stroke: #3b82f6; stroke-width: 2; rx: 8; }
-          .xid-decision { fill: #1a2332; stroke: #f59e0b; stroke-width: 2; }
-          .xid-action-green { fill: #064e3b; stroke: #10b981; stroke-width: 2; rx: 8; }
-          .xid-action-red { fill: #451a1a; stroke: #ef4444; stroke-width: 2; rx: 8; }
-          .xid-action-yellow { fill: #3b2f0a; stroke: #f59e0b; stroke-width: 2; rx: 8; }
-          .xid-text { fill: #e2e8f0; font-family: Inter, system-ui, sans-serif; font-size: 12px; text-anchor: middle; }
-          .xid-text-sm { fill: #cbd5e1; font-family: Inter, system-ui, sans-serif; font-size: 10px; text-anchor: middle; }
-          .xid-label { fill: #94a3b8; font-family: Inter, system-ui, sans-serif; font-size: 10px; text-anchor: middle; }
-          .xid-arrow { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#xid-arrowhead); }
-          .xid-title { fill: #f1f5f9; font-family: Inter, system-ui, sans-serif; font-size: 16px; font-weight: 700; text-anchor: middle; }
-        </style>
-        <defs>
-          <marker id="xid-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
-          </marker>
-        </defs>
+    <div class="mermaid-container">
+      <pre class="mermaid">
+graph TD
+    A["XID Error Detected in dmesg"] --> B{"XID Type?"}
 
-        <!-- Title -->
-        <text x="450" y="30" class="xid-title">XID Error Troubleshooting Decision Tree</text>
+    B -->|"48/63/94/95"| C["ECC / Memory"]
+    B -->|"74"| D["NVLink Error"]
+    B -->|"13/43/79"| E["Compute / Driver"]
+    B -->|"64"| F["GPU Fell Off Bus\nPower cycle, Reseat, RMA"]
 
-        <!-- Start: XID Detected -->
-        <rect x="340" y="50" width="220" height="40" class="xid-box"/>
-        <text x="450" y="75" class="xid-text">XID Error Detected in dmesg</text>
+    C --> G{"Double-bit\n48/95?"}
+    G -->|"Yes"| H["Drain Node\nKill Jobs\nRMA GPU"]
+    G -->|"No (31/94)"| I["Monitor frequency\n>5/week? Plan RMA"]
 
-        <!-- Decision: What type? -->
-        <polygon points="450,120 570,170 450,220 330,170" class="xid-decision"/>
-        <text x="450" y="167" class="xid-text">XID Type?</text>
-        <line x1="450" y1="90" x2="450" y2="120" class="xid-arrow"/>
+    D --> J["Check nvidia-smi nvlink -s"]
+    J --> K{"Errors on\none link?"}
+    K -->|"Yes"| L["Reseat/Replace\nNVLink Cable"]
+    K -->|"No / Multi"| M["Drain Node\nRMA GPU"]
 
-        <!-- Branch: ECC (XID 48/63/94/95) -->
-        <text x="240" y="160" class="xid-label">48/63/94/95</text>
-        <line x1="330" y1="170" x2="180" y2="170" class="xid-arrow"/>
-        <rect x="70" y="155" width="110" height="35" class="xid-action-red"/>
-        <text x="125" y="177" class="xid-text">ECC / Memory</text>
+    E --> N{"XID 43?\nHang"}
+    N -->|"Yes"| O["Check temp\nCheck power\nGPU reset"]
+    N -->|"No (13/79)"| P["Update driver\nCheck application\nUsually SW issue"]
 
-        <line x1="125" y1="190" x2="125" y2="220" class="xid-arrow"/>
-        <polygon points="125,220 205,255 125,290 45,255" class="xid-decision"/>
-        <text x="125" y="252" class="xid-text-sm">Double-bit</text>
-        <text x="125" y="263" class="xid-text-sm">(48/95)?</text>
-
-        <!-- Yes: Drain + RMA -->
-        <text x="30" y="250" class="xid-label">Yes</text>
-        <line x1="45" y1="255" x2="10" y2="255" class="xid-arrow"/>
-        <rect x="-5" y="290" width="130" height="50" class="xid-action-red" transform="translate(0,-40)"/>
-        <text x="60" y="265" class="xid-text-sm" transform="translate(-60,30)">Drain Node</text>
-        <text x="60" y="277" class="xid-text-sm" transform="translate(-60,30)">Kill Jobs</text>
-        <text x="60" y="289" class="xid-text-sm" transform="translate(-60,30)">RMA GPU</text>
-
-        <!-- No: Monitor -->
-        <text x="218" y="295" class="xid-label">No (31/94)</text>
-        <line x1="125" y1="290" x2="125" y2="320" class="xid-arrow"/>
-        <rect x="55" y="320" width="140" height="45" class="xid-action-yellow"/>
-        <text x="125" y="340" class="xid-text-sm">Monitor frequency</text>
-        <text x="125" y="353" class="xid-text-sm">&gt;5/week? Plan RMA</text>
-
-        <!-- Branch: NVLink (XID 74) -->
-        <text x="450" y="230" class="xid-label">74</text>
-        <line x1="450" y1="220" x2="450" y2="260" class="xid-arrow"/>
-        <rect x="385" y="260" width="130" height="35" class="xid-action-yellow"/>
-        <text x="450" y="282" class="xid-text">NVLink Error</text>
-
-        <line x1="450" y1="295" x2="450" y2="325" class="xid-arrow"/>
-        <rect x="370" y="325" width="160" height="35" class="xid-box"/>
-        <text x="450" y="347" class="xid-text">Check nvidia-smi nvlink -s</text>
-
-        <line x1="450" y1="360" x2="450" y2="390" class="xid-arrow"/>
-        <polygon points="450,390 540,425 450,460 360,425" class="xid-decision"/>
-        <text x="450" y="422" class="xid-text-sm">Errors on</text>
-        <text x="450" y="433" class="xid-text-sm">one link?</text>
-
-        <text x="348" y="420" class="xid-label">Yes</text>
-        <line x1="360" y1="425" x2="300" y2="425" class="xid-arrow"/>
-        <rect x="210" y="408" width="90" height="35" class="xid-action-yellow"/>
-        <text x="255" y="430" class="xid-text-sm">Reseat/Replace</text>
-        <text x="255" y="441" class="xid-text-sm">NVLink Cable</text>
-
-        <text x="553" y="420" class="xid-label">No / Multi</text>
-        <line x1="540" y1="425" x2="600" y2="425" class="xid-arrow"/>
-        <rect x="600" y="408" width="100" height="35" class="xid-action-red"/>
-        <text x="650" y="430" class="xid-text-sm">Drain Node</text>
-        <text x="650" y="441" class="xid-text-sm">RMA GPU</text>
-
-        <!-- Branch: Compute (XID 13/43/79) -->
-        <text x="640" y="160" class="xid-label">13/43/79</text>
-        <line x1="570" y1="170" x2="680" y2="170" class="xid-arrow"/>
-        <rect x="680" y="155" width="130" height="35" class="xid-action-yellow"/>
-        <text x="745" y="177" class="xid-text">Compute / Driver</text>
-
-        <line x1="745" y1="190" x2="745" y2="220" class="xid-arrow"/>
-        <polygon points="745,220 830,255 745,290 660,255" class="xid-decision"/>
-        <text x="745" y="252" class="xid-text-sm">XID 43?</text>
-        <text x="745" y="263" class="xid-text-sm">(Hang)</text>
-
-        <!-- XID 43: Yes -->
-        <text x="843" y="250" class="xid-label">Yes</text>
-        <line x1="830" y1="255" x2="870" y2="255" class="xid-arrow"/>
-        <rect x="820" y="290" width="70" height="70" class="xid-box" transform="translate(-5,-45)"/>
-        <text x="850" y="262" class="xid-text-sm" transform="translate(0,0)">Check temp</text>
-        <text x="850" y="274" class="xid-text-sm" transform="translate(0,0)">Check power</text>
-        <text x="850" y="286" class="xid-text-sm" transform="translate(0,0)">GPU reset</text>
-
-        <!-- XID 13/79: No -->
-        <text x="647" y="295" class="xid-label">No (13/79)</text>
-        <line x1="745" y1="290" x2="745" y2="320" class="xid-arrow"/>
-        <rect x="680" y="320" width="130" height="50" class="xid-action-green"/>
-        <text x="745" y="340" class="xid-text-sm">Update driver</text>
-        <text x="745" y="353" class="xid-text-sm">Check application</text>
-        <text x="745" y="366" class="xid-text-sm">Usually SW issue</text>
-
-        <!-- Branch: PCIe (XID 64) -->
-        <text x="550" y="130" class="xid-label">64</text>
-        <line x1="510" y1="145" x2="610" y2="100" class="xid-arrow"/>
-        <rect x="610" y="70" width="150" height="50" class="xid-action-red"/>
-        <text x="685" y="90" class="xid-text-sm">GPU Fell Off Bus</text>
-        <text x="685" y="103" class="xid-text-sm">Power cycle &rarr; Reseat &rarr; RMA</text>
-
-        <!-- Bottom summary -->
-        <rect x="200" y="500" width="500" height="65" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1"/>
-        <text x="450" y="520" class="xid-text" font-weight="600">General Rule of Thumb</text>
-        <text x="450" y="537" class="xid-text-sm">Single-bit ECC / XID 31 / XID 94 &rarr; Monitor &amp; schedule replacement</text>
-        <text x="450" y="551" class="xid-text-sm">Double-bit ECC / XID 48 / XID 63 / XID 95 &rarr; Drain immediately &amp; RMA</text>
-      </svg>
+    Q["General Rule of Thumb"]
+    Q --- R["Single-bit ECC / XID 31 / XID 94:\nMonitor and schedule replacement"]
+    Q --- S["Double-bit ECC / XID 48 / XID 63 / XID 95:\nDrain immediately and RMA"]
+      </pre>
     </div>
 
     <div class="callout-warning">

@@ -4,8 +4,11 @@
        SECTION HEADER
        ============================================================ -->
   <div class="section-header">
-    <div class="section-number">03</div>
-    <h1>Physical Networking &amp; RDMA Fabric</h1>
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="2">Layer 2</span>
+      <span class="section-number">03</span>
+    </div>
+    <h1 class="section-title">Physical Networking &amp; RDMA Fabric</h1>
     <p class="section-subtitle">InfiniBand, RoCE, GPUDirect, and the cabling that binds a GPU Superpod together</p>
   </div>
 
@@ -142,9 +145,10 @@
     <h3>RDMA Core Concepts</h3>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="expand-icon">+</span> Queue Pairs (QP), Completion Queues (CQ), and Memory Regions (MR)
-      </button>
+      <div class="expandable-header">
+        <h4>Queue Pairs (QP), Completion Queues (CQ), and Memory Regions (MR)</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>RDMA communication is built on three fundamental kernel-bypass objects:</p>
 
@@ -171,9 +175,10 @@
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="expand-icon">+</span> Verbs API (libibverbs) and RDMA Operations
-      </button>
+      <div class="expandable-header">
+        <h4>Verbs API (libibverbs) and RDMA Operations</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>The <strong>Verbs API</strong> (provided by <code>libibverbs</code>) is the standard programming interface for RDMA. It is intentionally low-level, giving applications direct control over HCA resources. The typical workflow:</p>
         <ol>
@@ -227,13 +232,114 @@
             </tbody>
           </table>
         </div>
+
+        <h4>QP State Machine</h4>
+        <p>Every Queue Pair must transition through a well-defined series of states before it can send or receive data. Each transition is performed via <code>ibv_modify_qp()</code> with specific required attributes:</p>
+        <div class="table-wrapper">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>Transition</th>
+                <th>Required Attributes</th>
+                <th>What Happens</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>RESET &rarr; INIT</strong></td>
+                <td>PKey index, port number, access flags</td>
+                <td>QP is associated with a specific HCA port and partition. Access flags determine whether remote RDMA Read/Write/Atomic operations are permitted on this QP.</td>
+              </tr>
+              <tr>
+                <td><strong>INIT &rarr; RTR</strong></td>
+                <td>Remote QPN, destination LID (IB) or GID (RoCE), path MTU, RQ PSN, max dest RD atomic, min RNR timer</td>
+                <td>QP learns about its remote peer. The Receive Queue becomes active&mdash;Receive WRs can be processed. The QP can now receive but not yet send. For RC QPs, this establishes the connection to the remote QP.</td>
+              </tr>
+              <tr>
+                <td><strong>RTR &rarr; RTS</strong></td>
+                <td>SQ PSN, timeout, retry count, RNR retry, max RD atomic</td>
+                <td>The Send Queue becomes active. The QP is now fully operational and can both send and receive. Timeout and retry parameters control how the HCA handles lost packets (RC only).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout callout-info">
+          <strong>Why so many states?</strong> The multi-step transition allows the two endpoints to exchange connection information (QPN, LID/GID, PSN) out-of-band (e.g., via TCP sockets or rdma_cm) before activating the QP. Both sides must reach RTR before either can transition to RTS, ensuring the receive side is ready before the send side starts transmitting.
+        </div>
+
+        <h4>RDMA Connection Manager (rdma_cm)</h4>
+        <p>The <strong>rdma_cm</strong> library (<code>librdmacm</code>) provides a higher-level connection management API that simplifies RDMA programming by abstracting the manual QP state transitions and out-of-band address exchange:</p>
+        <ul>
+          <li><strong>Address resolution:</strong> <code>rdma_resolve_addr()</code> and <code>rdma_resolve_route()</code> handle IP-to-GID resolution and path lookup, eliminating the need for manual LID/GID exchange.</li>
+          <li><strong>Connection setup:</strong> <code>rdma_connect()</code> / <code>rdma_accept()</code> implement a TCP-like connect/accept model. The library creates QPs, transitions them through RESET&rarr;INIT&rarr;RTR&rarr;RTS automatically, and exchanges connection parameters via CM (Communication Manager) protocol messages.</li>
+          <li><strong>Event-driven model:</strong> <code>rdma_get_cm_event()</code> delivers connection events (CONNECT_REQUEST, ESTABLISHED, DISCONNECTED) that applications can process asynchronously.</li>
+          <li><strong>Transport-agnostic:</strong> Works identically over InfiniBand and RoCEv2. Applications using rdma_cm do not need to know the underlying transport.</li>
+        </ul>
+        <p>Most production RDMA applications (including NCCL, UCX, libfabric) use rdma_cm for connection establishment rather than managing QP state transitions manually. Manual verbs-level control is primarily used in performance benchmarks and specialized low-level libraries.</p>
+
+        <h4>Diagnostic Commands</h4>
+        <p>The RDMA subsystem provides a comprehensive set of diagnostic tools for verifying configuration, testing connectivity, and measuring performance:</p>
+        <div class="table-wrapper">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Purpose</th>
+                <th>Example</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>ibstat</code></td>
+                <td>Display HCA port status, link state, speed, LID, and GID</td>
+                <td><code>ibstat mlx5_0</code> &mdash; shows port state (Active/Down), link speed (NDR), assigned LID</td>
+              </tr>
+              <tr>
+                <td><code>ibv_devinfo</code></td>
+                <td>Enumerate all RDMA devices and their capabilities</td>
+                <td><code>ibv_devinfo -v</code> &mdash; shows firmware version, node GUID, max QPs/CQs/MRs, atomic capabilities</td>
+              </tr>
+              <tr>
+                <td><code>ibv_devices</code></td>
+                <td>List all available RDMA devices</td>
+                <td><code>ibv_devices</code> &mdash; lists device names (mlx5_0, mlx5_1, ...) and their node GUIDs</td>
+              </tr>
+              <tr>
+                <td><code>ib_write_bw</code></td>
+                <td>Benchmark RDMA Write bandwidth between two nodes</td>
+                <td>Server: <code>ib_write_bw</code> / Client: <code>ib_write_bw &lt;server_ip&gt;</code> &mdash; reports bandwidth at various message sizes</td>
+              </tr>
+              <tr>
+                <td><code>ib_write_lat</code></td>
+                <td>Benchmark RDMA Write latency between two nodes</td>
+                <td><code>ib_write_lat &lt;server_ip&gt;</code> &mdash; reports median, 99th percentile, and max latency</td>
+              </tr>
+              <tr>
+                <td><code>ibdiagnet</code></td>
+                <td>Comprehensive fabric diagnostic scan</td>
+                <td><code>ibdiagnet --ls 10</code> &mdash; scans topology, checks for errors, validates routing, link speed consistency</td>
+              </tr>
+              <tr>
+                <td><code>perfquery</code></td>
+                <td>Read HCA port performance counters</td>
+                <td><code>perfquery -x</code> &mdash; shows extended counters including data bytes, packet counts, error counters per port</td>
+              </tr>
+              <tr>
+                <td><code>rdma link</code></td>
+                <td>Show RDMA link status (iproute2 rdma tool)</td>
+                <td><code>rdma link show</code> &mdash; shows all RDMA devices, link state, netdev association</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="expand-icon">+</span> Partitioning (PKeys) &mdash; VLANs for InfiniBand
-      </button>
+      <div class="expandable-header">
+        <h4>Partitioning (PKeys) &mdash; VLANs for InfiniBand</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>InfiniBand uses <strong>Partition Keys (PKeys)</strong> to segment traffic on a shared fabric, analogous to VLANs on Ethernet. Each PKey is a 16-bit value. The high bit indicates <strong>full</strong> vs. <strong>limited</strong> membership:</p>
         <ul>
@@ -248,6 +354,65 @@
           <li>Restrict management traffic to admin partitions</li>
         </ul>
         <p>Key difference from VLANs: PKeys provide membership enforcement at the HCA level. A node cannot forge PKey membership&mdash;the SM controls the PKey table, and the HCA enforces it in hardware.</p>
+
+        <h4>Partitions Configuration</h4>
+        <p>The Subnet Manager reads partition definitions from <code>/etc/opensm/partitions.conf</code>. Each line defines a partition with its members and their membership type:</p>
+        <pre><code># Format: PKey=members
+# Default partition — all ports are full members
+Default=0xFFFF, ipoib : ALL=full ;
+
+# Compute partition for MPI/NCCL traffic
+Compute=0x8001 : ALL_CAS=full ;
+
+# Storage partition for Lustre/GPFS
+Storage=0x8002 : storage-nodes=full, compute-nodes=limited ;
+
+# Management partition (restricted)
+Management=0x8003 : mgmt-nodes=full ;</code></pre>
+        <div class="callout callout-info">
+          <strong>IPoIB and PKeys:</strong> IP-over-InfiniBand (IPoIB) creates a network interface for each PKey the port is a member of. The default partition gives you <code>ib0</code>; additional partitions create child interfaces like <code>ib0.8001</code>. This allows standard IP-based services (NFS, SSH, DNS) to run over InfiniBand with partition-level isolation.
+        </div>
+
+        <h4>PKey Operational Commands</h4>
+        <div class="table-wrapper">
+          <table class="spec-table">
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Purpose</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>smpquery PKeyTable &lt;LID&gt; &lt;port&gt;</code></td>
+                <td>Query the PKey table of a specific port to see which partitions it belongs to</td>
+              </tr>
+              <tr>
+                <td><code>smpartition list</code></td>
+                <td>List all partitions configured in the SM and their member ports</td>
+              </tr>
+              <tr>
+                <td><code>cat /sys/class/infiniband/mlx5_0/ports/1/pkeys/*</code></td>
+                <td>Read the local HCA's PKey table entries from sysfs</td>
+              </tr>
+              <tr>
+                <td><code>ibaddr -P &lt;pkey&gt;</code></td>
+                <td>Resolve the local port's address information for a specific partition</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Virtual Lanes (VLs) and Service Levels (SLs)</h4>
+        <p>InfiniBand provides additional traffic separation beyond PKeys through <strong>Virtual Lanes</strong> and <strong>Service Levels</strong>:</p>
+        <ul>
+          <li><strong>Virtual Lanes (VLs):</strong> Each physical link is divided into up to 16 VLs (VL0&ndash;VL14 for data, VL15 reserved for management MADs). Each VL has its own independent credit-based flow control, so congestion on one VL cannot cause head-of-line blocking on another. The number of supported VLs is a hardware property of the HCA and switches (ConnectX-7 supports up to 16 data VLs).</li>
+          <li><strong>Service Levels (SLs):</strong> Applications tag each Queue Pair with an SL (0&ndash;15) that maps to a VL via the SL-to-VL mapping table in each switch. The SM configures the SL-to-VL mapping based on the fabric's QoS policy. This provides application-level QoS without application awareness of the underlying VL assignment.</li>
+          <li><strong>QoS use case in Superpod:</strong> Assign SL 0 for best-effort traffic (management, health checks), SL 1 for storage (Lustre), and SL 2 for compute (NCCL/MPI). Each SL maps to a dedicated VL with independent flow control, preventing storage congestion from affecting GPU collective performance.</li>
+        </ul>
+        <div class="callout callout-tip">
+          <strong>PKeys vs VLs:</strong> PKeys control <em>who</em> can communicate (access control / isolation). VLs control <em>how</em> traffic flows (QoS / anti-head-of-line-blocking). In a well-designed Superpod fabric, both are used together: PKeys isolate tenants and traffic classes, while VLs ensure that congestion in one traffic class does not impact another.
+        </div>
       </div>
     </div>
 
@@ -593,9 +758,10 @@ nv set qos pfc priority 3 xon-threshold 40000</code></pre>
       </div>
 
       <div class="expandable">
-        <button class="expandable-toggle" aria-expanded="false">
-          <span class="expand-icon">+</span> SHARP In-Network Computing
-        </button>
+        <div class="expandable-header">
+          <h4>SHARP In-Network Computing</h4>
+          <span class="expand-icon">+</span>
+        </div>
         <div class="expandable-content">
           <p><strong>SHARP (Scalable Hierarchical Aggregation and Reduction Protocol)</strong> offloads collective operations from the hosts into the switch network itself. Instead of data traversing the full tree for an allreduce (up to root, then back down), intermediate switches perform partial reductions as data passes through:</p>
           <ul>
@@ -656,9 +822,10 @@ nv set qos pfc priority 3 xon-threshold 40000</code></pre>
       </div>
 
       <div class="expandable">
-        <button class="expandable-toggle" aria-expanded="false">
-          <span class="expand-icon">+</span> What is Adaptive Routing on Spectrum-4?
-        </button>
+        <div class="expandable-header">
+          <h4>What is Adaptive Routing on Spectrum-4?</h4>
+          <span class="expand-icon">+</span>
+        </div>
         <div class="expandable-content">
           <p><strong>Adaptive routing</strong> on Spectrum-4 dynamically selects the least-congested ECMP next-hop for each packet, rather than using a static hash. Traditional ECMP hashes on the 5-tuple (src IP, dst IP, src port, dst port, protocol) to pick a single path per flow. This can lead to <strong>hash collisions</strong> where multiple large flows land on the same link while others are idle.</p>
           <p>Spectrum-4's adaptive routing monitors real-time egress queue depths across all ECMP members and steers packets to the least-loaded path. This happens per-packet (or per-flowlet), providing much better load balancing for elephant flows common in RDMA/NCCL traffic patterns.</p>
@@ -933,9 +1100,10 @@ nv set qos pfc priority 3 xon-threshold 40000</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="expand-icon">+</span> Connectors: MPO/MTP, LC, and SC
-      </button>
+      <div class="expandable-header">
+        <h4>Connectors: MPO/MTP, LC, and SC</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <h4>MPO/MTP (Multi-fiber Push On / Mechanical Transfer Push-on)</h4>
         <p>Multi-fiber connectors that bundle 8, 12, 16, or 24 fibers into a single ferrule. Used for parallel optics in high-speed links:</p>
@@ -1021,151 +1189,29 @@ nv set qos pfc priority 3 xon-threshold 40000</code></pre>
     </div>
 
     <!-- GPUDirect RDMA SVG -->
-    <div class="diagram-container">
+    <div class="mermaid-container">
       <h4>GPUDirect RDMA: Data Flow Comparison</h4>
-      <svg viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram comparing traditional data path through CPU memory versus GPUDirect RDMA path directly between NIC and GPU memory">
-        <rect width="800" height="520" fill="#0d1117" rx="8"/>
-
-        <!-- Title: Traditional Path -->
-        <text x="200" y="35" text-anchor="middle" fill="#ef5350" font-size="14" font-weight="bold">Traditional Path (without GPUDirect)</text>
-
-        <!-- Traditional Path - Remote Node -->
-        <rect x="30" y="55" width="120" height="50" rx="6" fill="#1a2233" stroke="#78909c" stroke-width="1.5"/>
-        <text x="90" y="78" text-anchor="middle" fill="#b0bec5" font-size="11">Remote GPU</text>
-        <text x="90" y="93" text-anchor="middle" fill="#78909c" font-size="9">Memory</text>
-
-        <!-- Arrow 1: Remote to Network -->
-        <line x1="150" y1="80" x2="175" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
-
-        <!-- Network cloud -->
-        <ellipse cx="215" cy="80" rx="35" ry="20" fill="none" stroke="#78909c" stroke-width="1.5" stroke-dasharray="4,3"/>
-        <text x="215" y="84" text-anchor="middle" fill="#78909c" font-size="9">Network</text>
-
-        <!-- Arrow 2: Network to NIC -->
-        <line x1="250" y1="80" x2="275" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
-
-        <!-- NIC -->
-        <rect x="275" y="60" width="70" height="40" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
-        <text x="310" y="84" text-anchor="middle" fill="#ef9a9a" font-size="10">NIC (HCA)</text>
-
-        <!-- Arrow 3: NIC to CPU Memory (copy 1) -->
-        <path d="M310,100 L310,140" stroke="#ef5350" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
-        <text x="330" y="125" fill="#ef5350" font-size="9" font-weight="bold">Copy 1</text>
-
-        <!-- CPU Memory -->
-        <rect x="265" y="140" width="90" height="45" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
-        <text x="310" y="160" text-anchor="middle" fill="#ef9a9a" font-size="10">CPU (Host)</text>
-        <text x="310" y="175" text-anchor="middle" fill="#ef9a9a" font-size="10">Memory</text>
-
-        <!-- Arrow 4: CPU Memory to GPU Memory (copy 2) -->
-        <path d="M310,185 L310,225" stroke="#ef5350" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
-        <text x="330" y="210" fill="#ef5350" font-size="9" font-weight="bold">Copy 2</text>
-
-        <!-- GPU Memory -->
-        <rect x="265" y="225" width="90" height="45" rx="4" fill="#1a2233" stroke="#ef5350" stroke-width="1.5"/>
-        <text x="310" y="245" text-anchor="middle" fill="#ef9a9a" font-size="10">GPU (HBM)</text>
-        <text x="310" y="260" text-anchor="middle" fill="#ef9a9a" font-size="10">Memory</text>
-
-        <!-- CPU involvement label -->
-        <rect x="60" y="148" width="180" height="30" rx="4" fill="#2a1520" stroke="#ef5350" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="150" y="167" text-anchor="middle" fill="#ef5350" font-size="10">CPU involved in data path</text>
-
-        <!-- ============ Divider ============ -->
-        <line x1="400" y1="50" x2="400" y2="280" stroke="#37474f" stroke-width="1" stroke-dasharray="6,4"/>
-
-        <!-- Title: GPUDirect RDMA -->
-        <text x="600" y="35" text-anchor="middle" fill="#66bb6a" font-size="14" font-weight="bold">GPUDirect RDMA Path</text>
-
-        <!-- GPUDirect - Remote Node -->
-        <rect x="430" y="55" width="120" height="50" rx="6" fill="#1a2233" stroke="#78909c" stroke-width="1.5"/>
-        <text x="490" y="78" text-anchor="middle" fill="#b0bec5" font-size="11">Remote GPU</text>
-        <text x="490" y="93" text-anchor="middle" fill="#78909c" font-size="9">Memory</text>
-
-        <!-- Arrow 1: Remote to Network -->
-        <line x1="550" y1="80" x2="575" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
-
-        <!-- Network cloud -->
-        <ellipse cx="615" cy="80" rx="35" ry="20" fill="none" stroke="#78909c" stroke-width="1.5" stroke-dasharray="4,3"/>
-        <text x="615" y="84" text-anchor="middle" fill="#78909c" font-size="9">Network</text>
-
-        <!-- Arrow 2: Network to NIC -->
-        <line x1="650" y1="80" x2="675" y2="80" stroke="#78909c" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
-
-        <!-- NIC -->
-        <rect x="675" y="60" width="70" height="40" rx="4" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
-        <text x="710" y="84" text-anchor="middle" fill="#a5d6a7" font-size="10">NIC (HCA)</text>
-
-        <!-- GPUDirect direct path: NIC directly to GPU Memory -->
-        <path d="M710,100 L710,225" stroke="#66bb6a" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
-        <text x="735" y="165" fill="#66bb6a" font-size="10" font-weight="bold">Direct</text>
-        <text x="735" y="180" fill="#66bb6a" font-size="10" font-weight="bold">PCIe P2P</text>
-
-        <!-- CPU Memory (bypassed) -->
-        <rect x="500" y="140" width="90" height="45" rx="4" fill="#0d1117" stroke="#37474f" stroke-width="1" stroke-dasharray="4,3"/>
-        <text x="545" y="160" text-anchor="middle" fill="#37474f" font-size="10">CPU (Host)</text>
-        <text x="545" y="175" text-anchor="middle" fill="#37474f" font-size="10">Memory</text>
-        <!-- X mark on CPU box -->
-        <line x1="508" y1="148" x2="582" y2="177" stroke="#37474f" stroke-width="1.5"/>
-        <line x1="582" y1="148" x2="508" y2="177" stroke="#37474f" stroke-width="1.5"/>
-
-        <!-- GPU Memory -->
-        <rect x="665" y="225" width="90" height="45" rx="4" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
-        <text x="710" y="245" text-anchor="middle" fill="#a5d6a7" font-size="10">GPU (HBM)</text>
-        <text x="710" y="260" text-anchor="middle" fill="#a5d6a7" font-size="10">Memory</text>
-
-        <!-- CPU bypassed label -->
-        <rect x="460" y="198" width="180" height="30" rx="4" fill="#0d2210" stroke="#66bb6a" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="550" y="217" text-anchor="middle" fill="#66bb6a" font-size="10">CPU completely bypassed</text>
-
-        <!-- ============ Bottom: All GPUDirect variants ============ -->
-        <line x1="20" y1="300" x2="780" y2="300" stroke="#37474f" stroke-width="1"/>
-        <text x="400" y="325" text-anchor="middle" fill="#e0e0e0" font-size="13" font-weight="bold">GPUDirect Technology Family</text>
-
-        <!-- GPUDirect RDMA box -->
-        <rect x="30" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#4fc3f7" stroke-width="1.5"/>
-        <text x="110" y="370" text-anchor="middle" fill="#4fc3f7" font-size="12" font-weight="bold">GPUDirect RDMA</text>
-        <text x="110" y="390" text-anchor="middle" fill="#90caf9" font-size="9">NIC &harr; GPU Memory</text>
-        <text x="110" y="405" text-anchor="middle" fill="#78909c" font-size="9">Bypasses CPU for</text>
-        <text x="110" y="418" text-anchor="middle" fill="#78909c" font-size="9">network transfers</text>
-
-        <!-- GPUDirect Storage box -->
-        <rect x="220" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#ffa726" stroke-width="1.5"/>
-        <text x="300" y="370" text-anchor="middle" fill="#ffa726" font-size="12" font-weight="bold">GPUDirect Storage</text>
-        <text x="300" y="390" text-anchor="middle" fill="#ffcc80" font-size="9">NVMe &harr; GPU Memory</text>
-        <text x="300" y="405" text-anchor="middle" fill="#78909c" font-size="9">Direct path from storage</text>
-        <text x="300" y="418" text-anchor="middle" fill="#78909c" font-size="9">to GPU (via cuFile API)</text>
-
-        <!-- GPUDirect P2P box -->
-        <rect x="410" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#66bb6a" stroke-width="1.5"/>
-        <text x="490" y="370" text-anchor="middle" fill="#66bb6a" font-size="12" font-weight="bold">GPUDirect P2P</text>
-        <text x="490" y="390" text-anchor="middle" fill="#a5d6a7" font-size="9">GPU &harr; GPU (same node)</text>
-        <text x="490" y="405" text-anchor="middle" fill="#78909c" font-size="9">PCIe or NVLink between</text>
-        <text x="490" y="418" text-anchor="middle" fill="#78909c" font-size="9">GPUs, no CPU staging</text>
-
-        <!-- GPUDirect Async box -->
-        <rect x="600" y="345" width="160" height="90" rx="6" fill="#1a2233" stroke="#ce93d8" stroke-width="1.5"/>
-        <text x="680" y="370" text-anchor="middle" fill="#ce93d8" font-size="12" font-weight="bold">GPUDirect Async</text>
-        <text x="680" y="390" text-anchor="middle" fill="#e1bee7" font-size="9">GPU-initiated transfers</text>
-        <text x="680" y="405" text-anchor="middle" fill="#78909c" font-size="9">GPU kernel triggers</text>
-        <text x="680" y="418" text-anchor="middle" fill="#78909c" font-size="9">network ops directly</text>
-
-        <!-- Performance note -->
-        <text x="400" y="475" text-anchor="middle" fill="#90a4ae" font-size="11" font-style="italic">GPUDirect RDMA + NVLink enable the full-bisection bandwidth required for efficient multi-node LLM training</text>
-        <text x="400" y="495" text-anchor="middle" fill="#78909c" font-size="10">Combined, these technologies eliminate all CPU-mediated copies from the GPU communication path</text>
-
-        <!-- Arrow marker definitions -->
-        <defs>
-          <marker id="arrow-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <path d="M0,0 L8,3 L0,6 Z" fill="#78909c"/>
-          </marker>
-          <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <path d="M0,0 L8,3 L0,6 Z" fill="#ef5350"/>
-          </marker>
-          <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <path d="M0,0 L8,3 L0,6 Z" fill="#66bb6a"/>
-          </marker>
-        </defs>
-      </svg>
+      <div class="mermaid">
+graph TD
+  subgraph traditional["Traditional Path (without GPUDirect)"]
+    T1["Remote GPU Memory"] -->|Network| T2["NIC (HCA)"]
+    T2 -->|"Copy 1"| T3["CPU Host Memory"]
+    T3 -->|"Copy 2"| T4["GPU HBM Memory"]
+    T5["CPU involved in data path"]
+  end
+  subgraph gpudirect["GPUDirect RDMA Path"]
+    G1["Remote GPU Memory"] -->|Network| G2["NIC (HCA)"]
+    G2 -->|"Direct PCIe P2P"| G4["GPU HBM Memory"]
+    G3["CPU Host Memory (bypassed)"]
+    G5["CPU completely bypassed"]
+  end
+  subgraph family["GPUDirect Technology Family"]
+    F1["GPUDirect RDMA: NIC to GPU Memory - bypasses CPU for network transfers"]
+    F2["GPUDirect Storage: NVMe to GPU Memory - direct path via cuFile API"]
+    F3["GPUDirect P2P: GPU to GPU same node - PCIe or NVLink, no CPU staging"]
+    F4["GPUDirect Async: GPU-initiated transfers - GPU kernel triggers network ops"]
+  end
+      </div>
     </div>
 
     <!-- GPUDirect RDMA -->

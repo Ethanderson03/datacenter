@@ -1,7 +1,11 @@
 <section id="storage" class="content-section" data-layer="5">
 
   <div class="section-header">
-    <h2>Storage Architecture for GPU Clusters</h2>
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="5">Layer 5</span>
+      <span class="section-number">07</span>
+    </div>
+    <h1 class="section-title">Storage Architecture for GPU Clusters</h1>
     <p class="section-subtitle">From NVMe flash to parallel file systems &mdash; feeding data to thousands of GPUs without starving the pipeline</p>
   </div>
 
@@ -191,7 +195,10 @@
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">NFSv4.1 pNFS Deep Dive</button>
+      <div class="expandable-header">
+        <h4>NFSv4.1 pNFS Deep Dive</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p><strong>pNFS (Parallel NFS)</strong> separates the metadata path from the data path. The MDS (Metadata Server) provides <em>layout</em> information that tells the client exactly which data servers hold which byte ranges of a file. The client then reads/writes directly to the data servers in parallel, bypassing the MDS for I/O.</p>
         <p><strong>Layout types:</strong></p>
@@ -470,7 +477,10 @@ multipath -ll</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">Lustre Striping &amp; lfs Commands</button>
+      <div class="expandable-header">
+        <h4>Lustre Striping &amp; lfs Commands</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Set striping for a directory: 4 stripes, 1MB stripe size
 lfs setstripe -c 4 -S 1M /mnt/lustre/training_data/
@@ -515,7 +525,10 @@ lfs setstripe -E 1G -c 1 -S 1M -E 64G -c 4 -S 4M -E -1 -c -1 -S 4M /mnt/lustre/p
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">LNET (Lustre Networking) Configuration</button>
+      <div class="expandable-header">
+        <h4>LNET (Lustre Networking) Configuration</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>LNET is the networking abstraction layer in Lustre. It supports multiple transports simultaneously and provides routing between different network types.</p>
 <pre><code class="language-bash"># Show LNET configuration
@@ -567,7 +580,10 @@ lnetctl route add --net o2ib1 --gateway 10.0.0.254@o2ib --hop 1</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">GPFS/Storage Scale Commands (mmfs)</button>
+      <div class="expandable-header">
+        <h4>GPFS/Storage Scale Commands (mmfs)</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Create a GPFS filesystem
 mmcrfs /dev/gpfs_data -F /tmp/disk_descriptors.txt -A yes -B 16M \
@@ -626,7 +642,10 @@ mmchconfig maxMBpS=20000 -i   # Max throughput per node</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">WekaFS Deployment &amp; Management</button>
+      <div class="expandable-header">
+        <h4>WekaFS Deployment &amp; Management</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Install Weka agent on a backend node
 curl -fsSL https://get.weka.io | sh
@@ -690,7 +709,10 @@ weka gds enable --filesystem training_data</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">BeeGFS Setup &amp; Configuration</button>
+      <div class="expandable-header">
+        <h4>BeeGFS Setup &amp; Configuration</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Install BeeGFS (on all nodes)
 wget -q https://www.beegfs.io/release/beegfs_7.4/dists/beegfs-rhel9.repo \
@@ -858,7 +880,10 @@ beegfs-ctl --listtargets --nodetype=storage --state</code></pre>
     <h4>MinIO</h4>
 
     <div class="expandable">
-      <button class="expandable-toggle">MinIO: High-Performance S3 Implementation</button>
+      <div class="expandable-header">
+        <h4>MinIO: High-Performance S3 Implementation</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>MinIO is an open-source, S3-compatible object store designed for high performance on commodity hardware. It is written in Go and is commonly used as the object storage tier behind parallel file systems or as a standalone data lake.</p>
 
@@ -1029,7 +1054,10 @@ mc replicate add gpu-store/training-data --remote-bucket backup-store/training-d
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">Ceph Deployment &amp; Tuning for NVMe</button>
+      <div class="expandable-header">
+        <h4>Ceph Deployment &amp; Tuning for NVMe</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Deploy Ceph with cephadm (modern method)
 cephadm bootstrap --mon-ip 10.0.10.1 --cluster-network 10.0.20.0/24
@@ -1156,7 +1184,10 @@ kubectl apply -f https://raw.githubusercontent.com/rook/rook/release-1.14/deploy
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle">NVMe-oF Configuration Examples</button>
+      <div class="expandable-header">
+        <h4>NVMe-oF Configuration Examples</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># === TARGET SIDE (Storage Server) ===
 
@@ -1455,7 +1486,10 @@ apt install nvidia-gds
     <h4>ZFS for Storage Servers</h4>
 
     <div class="expandable">
-      <button class="expandable-toggle">ZFS Features for HPC Storage</button>
+      <div class="expandable-header">
+        <h4>ZFS Features for HPC Storage</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>ZFS is a combined volume manager and file system that provides data integrity, compression, and flexible storage management. It is used as the backend filesystem on Lustre OST/MDT devices and on Ceph OSD nodes.</p>
 <pre><code class="language-bash"># Create a ZFS pool with RAID-Z2 (double parity, similar to RAID 6)

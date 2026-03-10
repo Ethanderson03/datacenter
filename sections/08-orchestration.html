@@ -4,16 +4,601 @@
        SECTION HEADER
        ============================================================ -->
   <div class="section-header">
-    <span class="section-number">08</span>
-    <h2>Orchestration &amp; Cluster Management</h2>
-    <p class="section-subtitle">Kubernetes, GPU Operators, RDMA Networking, and Job Scheduling for GPU Superpods</p>
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="6">Layer 6</span>
+      <span class="section-number">08</span>
+    </div>
+    <h1 class="section-title">Orchestration &amp; Cluster Management</h1>
+    <p class="section-subtitle">Kubernetes Fundamentals, Slurm, GPU Operators, RDMA Networking, and Job Scheduling for GPU Superpods</p>
   </div>
 
   <!-- ============================================================
-       1. KUBERNETES FOR GPU CLUSTERS
+       1. KUBERNETES FUNDAMENTALS
+       ============================================================ -->
+  <div class="subsection" id="k8s-fundamentals">
+    <h3>1. Kubernetes Fundamentals</h3>
+
+    <div class="info-card">
+      <h4>What is Kubernetes?</h4>
+      <p>
+        <strong>Kubernetes</strong> (K8s) is an open-source container orchestration platform originally developed
+        by Google and now maintained by the Cloud Native Computing Foundation (CNCF). It automates the deployment,
+        scaling, and management of containerized applications across clusters of machines. In a GPU datacenter
+        context, Kubernetes serves as the control plane that decides <em>which workloads run on which nodes</em>,
+        ensures they stay running, and provides networking and storage abstractions that let researchers and
+        engineers focus on their models rather than infrastructure plumbing.
+      </p>
+      <p>
+        Before Kubernetes, deploying a distributed training job meant SSH-ing into individual machines,
+        manually starting processes, configuring environment variables, and monitoring each node independently.
+        Kubernetes replaces all of that with a <strong>declarative API</strong>: you describe your desired
+        state in YAML, and Kubernetes continuously works to make reality match your specification. If a node
+        fails, pods are automatically rescheduled. If you scale from 8 to 32 GPUs, you change one number
+        in a manifest.
+      </p>
+    </div>
+
+    <h4>Control Plane Components</h4>
+    <p>
+      The Kubernetes <strong>control plane</strong> runs on dedicated master nodes (typically 3 for high availability)
+      and manages the overall cluster state. Understanding these components is essential for debugging scheduling
+      issues, API timeouts, and cluster instability:
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>What It Does</th>
+            <th>Why It Matters for GPU Clusters</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>kube-apiserver</strong></td>
+            <td>
+              The front door to the cluster. Every <code>kubectl</code> command, every operator controller,
+              and every kubelet heartbeat goes through the API server. It validates and processes RESTful
+              API requests, persists state to etcd, and serves as the hub for all cluster communication.
+            </td>
+            <td>
+              Must be scaled for large clusters (100+ nodes). GPU operators and device plugins make frequent
+              API calls. High API latency = slow scheduling = idle GPUs.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>etcd</strong></td>
+            <td>
+              A distributed key-value store that holds <em>all</em> cluster state: node registrations, pod
+              specs, ConfigMaps, Secrets, resource quotas, and custom resources. It uses the Raft consensus
+              algorithm for consistency across replicas.
+            </td>
+            <td>
+              etcd performance directly limits cluster size. Each GPU node with 8 GPUs, 8 RDMA devices,
+              and dozens of labels generates significant state. Use SSDs for etcd, monitor latency, and
+              compact regularly.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>kube-scheduler</strong></td>
+            <td>
+              Watches for unscheduled pods and assigns them to nodes. Runs through a series of
+              <em>filter</em> (hard constraints) and <em>score</em> (soft preferences) plugins to find
+              the best node. Filters eliminate nodes that don't meet resource or affinity requirements;
+              scoring ranks the remaining candidates.
+            </td>
+            <td>
+              The default scheduler understands <code>nvidia.com/gpu</code> as an extended resource but lacks
+              GPU topology awareness. Gang scheduling requires additional schedulers (Volcano) or admission
+              controllers (Kueue).
+            </td>
+          </tr>
+          <tr>
+            <td><strong>kube-controller-manager</strong></td>
+            <td>
+              Runs a collection of control loops that watch cluster state and make changes to move toward
+              the desired state. Includes the Node Controller (detects node failures), Job Controller
+              (manages batch Jobs), ReplicaSet Controller (maintains pod counts), and many others.
+            </td>
+            <td>
+              The Node Controller's <code>--node-monitor-grace-period</code> determines how quickly a
+              failed GPU node is marked NotReady. Too aggressive = false positives during driver updates.
+              Too slow = wasted GPU time on dead nodes.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Worker Node Components</h4>
+    <p>
+      Every worker node (each DGX system in a SuperPOD) runs these components:
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>What It Does</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>kubelet</strong></td>
+            <td>
+              The node agent that communicates with the API server. It receives pod specs (via the API server),
+              instructs the container runtime to start containers, reports node status (capacity, allocatable
+              resources, conditions), and manages pod lifecycle (liveness/readiness probes, restarts). The
+              kubelet is also responsible for calling <strong>Device Plugin</strong> <code>Allocate()</code>
+              RPCs when pods request extended resources like GPUs.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>kube-proxy</strong></td>
+            <td>
+              Maintains network rules on each node for Kubernetes <strong>Services</strong>. Implements the
+              virtual IP (ClusterIP) abstraction by programming iptables or IPVS rules that route traffic
+              to the correct backend pods. In GPU clusters with Cilium, kube-proxy is often replaced by
+              Cilium's eBPF-based implementation for better performance.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Container Runtime</strong></td>
+            <td>
+              The software that actually runs containers. Kubernetes uses the <strong>Container Runtime Interface
+              (CRI)</strong> to communicate with the runtime. <code>containerd</code> is the standard runtime,
+              with the NVIDIA Container Toolkit providing GPU-aware runtime hooks that inject GPU devices and
+              driver libraries into containers transparently.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Core Kubernetes Objects</h4>
+    <p>
+      Everything in Kubernetes is represented as an <strong>object</strong> &mdash; a persistent entity in
+      the cluster that describes your desired state. Objects are defined in YAML manifests and managed through
+      the API server. Here are the foundational objects you'll work with daily:
+    </p>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Pods</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          A <strong>Pod</strong> is the smallest deployable unit in Kubernetes &mdash; a wrapper around one or
+          more containers that share the same network namespace (IP address), storage volumes, and lifecycle.
+          In GPU workloads, a pod typically contains a single container running a training or inference process.
+          Pods are ephemeral by design: they can be killed, rescheduled, or replaced at any time.
+        </p>
+        <pre><code class="language-yaml"># Simplest possible pod manifest
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-first-pod
+  namespace: default
+  labels:
+    app: hello-gpu              # Labels are key-value pairs for selection
+spec:
+  containers:
+  - name: cuda-test
+    image: nvcr.io/nvidia/cuda:12.3.1-base-ubuntu22.04
+    command: ["nvidia-smi"]     # Run nvidia-smi and exit
+    resources:
+      requests:                 # Minimum resources guaranteed
+        cpu: "1"
+        memory: "4Gi"
+      limits:                   # Maximum resources allowed
+        cpu: "4"
+        memory: "8Gi"
+        nvidia.com/gpu: 1       # Request 1 GPU</code></pre>
+        <p>
+          <strong>Key concept:</strong> <code>requests</code> vs <code>limits</code>. Requests are what the
+          scheduler uses for placement decisions &mdash; the node must have this much available. Limits are
+          enforced at runtime &mdash; the container is throttled (CPU) or killed (memory) if it exceeds them.
+          For GPUs, requests and limits must be equal (no overcommit).
+        </p>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Deployments &amp; ReplicaSets</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          A <strong>Deployment</strong> manages a set of identical pod replicas. It ensures the specified
+          number of pods are always running, handles rolling updates (gradually replacing old pods with new
+          ones), and supports rollbacks. Deployments create <strong>ReplicaSets</strong> under the hood,
+          which maintain the actual pod count. In GPU clusters, Deployments are commonly used for
+          <em>inference servers</em> (e.g., Triton Inference Server replicas) where you want N copies of
+          a model-serving container behind a load balancer.
+        </p>
+        <pre><code class="language-yaml"># Deployment for GPU inference servers
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triton-inference
+  namespace: inference-prod
+spec:
+  replicas: 4                   # Run 4 inference server replicas
+  selector:
+    matchLabels:
+      app: triton               # Must match template labels
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1         # At most 1 pod down during update
+      maxSurge: 1               # At most 1 extra pod during update
+  template:                     # Pod template (same as Pod spec)
+    metadata:
+      labels:
+        app: triton
+    spec:
+      containers:
+      - name: triton
+        image: nvcr.io/nvidia/tritonserver:24.01-py3
+        ports:
+        - containerPort: 8000   # HTTP
+        - containerPort: 8001   # gRPC
+        - containerPort: 8002   # Metrics
+        resources:
+          limits:
+            nvidia.com/gpu: 1   # 1 GPU per replica
+        readinessProbe:         # Don't send traffic until ready
+          httpGet:
+            path: /v2/health/ready
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Services</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          A <strong>Service</strong> provides a stable network endpoint (IP address and DNS name) for a set
+          of pods. Since pods are ephemeral and get new IPs when rescheduled, you can't rely on pod IPs
+          directly. A Service uses a <strong>label selector</strong> to find its backend pods and load-balances
+          traffic across them.
+        </p>
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Service Type</th>
+                <th>Behavior</th>
+                <th>Use Case</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>ClusterIP</code></td>
+                <td>Internal-only virtual IP, reachable only within the cluster</td>
+                <td>Inter-service communication (e.g., app &rarr; database)</td>
+              </tr>
+              <tr>
+                <td><code>NodePort</code></td>
+                <td>Exposes the service on a static port (30000-32767) on every node's IP</td>
+                <td>Quick external access for debugging/testing</td>
+              </tr>
+              <tr>
+                <td><code>LoadBalancer</code></td>
+                <td>Provisions an external load balancer (cloud) or uses MetalLB (bare-metal)</td>
+                <td>Production inference API endpoints</td>
+              </tr>
+              <tr>
+                <td><code>Headless</code></td>
+                <td>No ClusterIP; DNS returns individual pod IPs directly</td>
+                <td>StatefulSets, distributed training master discovery</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <pre><code class="language-yaml"># Service exposing Triton inference servers
+apiVersion: v1
+kind: Service
+metadata:
+  name: triton-service
+  namespace: inference-prod
+spec:
+  type: ClusterIP
+  selector:
+    app: triton                 # Routes to pods with this label
+  ports:
+  - name: http
+    port: 8000                  # Service port
+    targetPort: 8000            # Container port
+  - name: grpc
+    port: 8001
+    targetPort: 8001</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Namespaces</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          <strong>Namespaces</strong> provide logical isolation within a cluster. They partition resources,
+          apply access controls (RBAC), and scope resource quotas. In a multi-tenant GPU cluster, each team
+          or project typically gets its own namespace with a defined GPU quota:
+        </p>
+        <pre><code class="language-yaml"># Team namespace with GPU resource quota
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-nlp
+  labels:
+    team: nlp
+    gpu-tier: high-priority
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gpu-quota
+  namespace: team-nlp
+spec:
+  hard:
+    requests.nvidia.com/gpu: "64"   # Team can use up to 64 GPUs
+    requests.cpu: "512"
+    requests.memory: "4Ti"
+    pods: "200"</code></pre>
+        <p>
+          Default namespaces: <code>default</code> (user workloads if no namespace specified),
+          <code>kube-system</code> (core K8s components), <code>kube-public</code> (publicly readable),
+          <code>kube-node-lease</code> (node heartbeat leases).
+        </p>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>ConfigMaps &amp; Secrets</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          <strong>ConfigMaps</strong> store non-sensitive configuration data as key-value pairs. They
+          decouple configuration from container images, allowing the same image to be used across environments.
+          <strong>Secrets</strong> store sensitive data (tokens, passwords, TLS certificates) with base64
+          encoding and optional encryption at rest.
+        </p>
+        <pre><code class="language-yaml"># ConfigMap for training hyperparameters
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: training-config
+  namespace: team-nlp
+data:
+  BATCH_SIZE: "32"
+  LEARNING_RATE: "0.0001"
+  MAX_EPOCHS: "100"
+  NCCL_DEBUG: "WARN"
+  NCCL_IB_HCA: "mlx5"
+---
+# Secret for NGC API key (used to pull containers from nvcr.io)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ngc-secret
+  namespace: team-nlp
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: &lt;base64-encoded-docker-config&gt;</code></pre>
+        <p>
+          ConfigMaps can be mounted as files or injected as environment variables. For GPU workloads,
+          they commonly hold NCCL tuning parameters, model configurations, and training hyperparameters.
+        </p>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Persistent Volumes &amp; Claims</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          <strong>PersistentVolumes (PVs)</strong> represent physical storage resources in the cluster
+          (a Lustre mount, an NFS share, a local SSD). <strong>PersistentVolumeClaims (PVCs)</strong> are
+          user requests for storage &mdash; pods reference PVCs, and Kubernetes binds them to suitable PVs.
+          This abstraction lets pods consume storage without knowing the underlying implementation.
+        </p>
+        <pre><code class="language-yaml"># PV pointing to a Lustre filesystem
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lustre-training-data
+spec:
+  capacity:
+    storage: 100Ti
+  accessModes:
+  - ReadWriteMany                 # Multiple pods can read/write simultaneously
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: lustre
+  csi:
+    driver: lustre.csi.hpe.com
+    volumeHandle: lustre-fs-01
+    volumeAttributes:
+      mgs: 10.0.1.100@tcp
+      fsName: scratch
+---
+# PVC requesting storage from the Lustre PV
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-data
+  namespace: team-nlp
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: lustre
+  resources:
+    requests:
+      storage: 10Ti               # Request 10 TiB from the Lustre pool</code></pre>
+        <p>
+          <strong>Access modes:</strong> <code>ReadWriteOnce</code> (single node), <code>ReadOnlyMany</code>
+          (many nodes read-only), <code>ReadWriteMany</code> (many nodes read-write). Distributed training
+          requires <code>ReadWriteMany</code> for shared datasets and checkpoints.
+        </p>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Jobs &amp; CronJobs</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          A <strong>Job</strong> creates one or more pods that run to completion (unlike Deployments, which
+          run indefinitely). Jobs are the natural fit for training runs, data preprocessing, and batch
+          inference. A <strong>CronJob</strong> creates Jobs on a schedule (e.g., nightly retraining).
+        </p>
+        <pre><code class="language-yaml"># Job for a single-node GPU training run
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: finetune-bert
+  namespace: team-nlp
+spec:
+  backoffLimit: 3                 # Retry up to 3 times on failure
+  activeDeadlineSeconds: 86400    # Kill after 24 hours max
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: trainer
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        command: ["python", "train.py", "--model=bert-large"]
+        resources:
+          limits:
+            nvidia.com/gpu: 8     # Use all 8 GPUs on one node
+            memory: "512Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: training-data</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>DaemonSets &amp; StatefulSets</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          <strong>DaemonSets</strong> ensure that a copy of a pod runs on every node (or a subset of nodes
+          matching a selector). The NVIDIA GPU Operator uses DaemonSets extensively &mdash; the device plugin,
+          DCGM exporter, GPU feature discovery, and driver container all run as DaemonSets to guarantee
+          one instance per GPU node.
+        </p>
+        <p>
+          <strong>StatefulSets</strong> manage stateful applications that need stable network identities
+          and persistent storage. Each pod gets a predictable hostname (<code>pod-name-0</code>,
+          <code>pod-name-1</code>, etc.) and its own PVC. StatefulSets are used for databases (etcd itself),
+          distributed storage systems, and occasionally for distributed training where stable pod identities
+          simplify rank assignment.
+        </p>
+      </div>
+    </div>
+
+    <h4>Essential kubectl Commands</h4>
+    <p>
+      <code>kubectl</code> is the CLI for interacting with a Kubernetes cluster. These are the commands
+      you will use most frequently:
+    </p>
+
+    <pre><code class="language-bash"># --- Cluster & Node Info ---
+kubectl cluster-info                     # API server and CoreDNS endpoints
+kubectl get nodes -o wide                # List all nodes with IPs, OS, kernel
+kubectl describe node dgx-node-01       # Detailed node info (capacity, allocatable, conditions)
+kubectl top nodes                        # CPU and memory usage per node
+
+# --- Working with Pods ---
+kubectl get pods -n team-nlp             # List pods in a namespace
+kubectl get pods -A                      # List pods across ALL namespaces
+kubectl describe pod training-pod-0      # Events, conditions, container statuses
+kubectl logs training-pod-0 -f           # Stream logs from a pod (-f = follow)
+kubectl logs training-pod-0 -c pytorch   # Logs from a specific container
+kubectl exec -it debug-pod -- bash       # Open a shell inside a running pod
+kubectl delete pod stuck-pod             # Delete a pod (it may be recreated by its controller)
+
+# --- Deployments & Scaling ---
+kubectl get deployments -n inference     # List deployments
+kubectl scale deployment triton --replicas=8  # Scale to 8 replicas
+kubectl rollout status deployment triton      # Watch a rolling update
+kubectl rollout undo deployment triton        # Roll back to previous version
+
+# --- Resources & Quotas ---
+kubectl describe resourcequota -n team-nlp    # See GPU quota usage
+kubectl get events -n team-nlp --sort-by=.metadata.creationTimestamp  # Recent events
+
+# --- Debugging Scheduling ---
+kubectl describe pod pending-pod | grep -A 20 Events  # Why is a pod Pending?
+# Common reasons: Insufficient nvidia.com/gpu, node taints without tolerations,
+# affinity rules that can't be satisfied, resource quota exceeded
+
+# --- Apply & Delete Manifests ---
+kubectl apply -f training-job.yaml       # Create or update resources from YAML
+kubectl delete -f training-job.yaml      # Delete resources defined in YAML
+kubectl diff -f training-job.yaml        # Preview changes before applying</code></pre>
+
+    <div class="callout callout-info">
+      <h5>Declarative vs. Imperative</h5>
+      <p>
+        Kubernetes strongly favors the <strong>declarative</strong> model: you write YAML describing the
+        desired end state and <code>kubectl apply</code> it. Kubernetes figures out what changes are needed.
+        The <strong>imperative</strong> approach (<code>kubectl create</code>, <code>kubectl run</code>) is
+        useful for quick tests but should not be used for production workloads. Always version-control your
+        YAML manifests in Git &mdash; this is the foundation of GitOps.
+      </p>
+    </div>
+
+    <h4>How the Scheduler Makes Decisions</h4>
+    <p>
+      When a pod is created, the scheduler runs a multi-step process to find the best node:
+    </p>
+    <ol>
+      <li><strong>Filtering:</strong> Eliminate nodes that cannot run the pod. Reasons include: insufficient CPU/memory/GPU resources, node taints without matching tolerations, node affinity rules that don't match, and pod anti-affinity conflicts.</li>
+      <li><strong>Scoring:</strong> Rank remaining nodes by desirability. Factors include: resource balance (spread vs. pack), topology preferences (preferred node/rack affinity), and custom scoring plugins.</li>
+      <li><strong>Binding:</strong> The highest-scoring node is selected, and the pod is bound to it. The kubelet on that node receives the pod spec and starts containers.</li>
+    </ol>
+
+    <pre><code class="language-bash"># Check why a pod is stuck in Pending state
+kubectl describe pod my-training-pod
+
+# Look for events like:
+# "0/32 nodes are available: 32 Insufficient nvidia.com/gpu"
+#   → No node has enough free GPUs
+# "0/32 nodes are available: 32 node(s) had untolerated taint {nvidia.com/gpu: present}"
+#   → Pod is missing the GPU toleration
+# "0/32 nodes are available: 8 node(s) didn't match Pod's node affinity/selector"
+#   → nodeSelector or nodeAffinity excludes available nodes</code></pre>
+  </div>
+
+  <!-- ============================================================
+       2. KUBERNETES FOR GPU CLUSTERS
        ============================================================ -->
   <div class="subsection" id="k8s-gpu-clusters">
-    <h3>1. Kubernetes for GPU Clusters</h3>
+    <h3>2. Kubernetes for GPU Clusters</h3>
 
     <div class="info-card">
       <h4>Why Kubernetes for HPC / GPU Infrastructure?</h4>
@@ -170,9 +755,10 @@ kubectl label nodes dgx-node-01 nvidia.com/gpu.product=NVIDIA-H100-SXM5-80GB</co
     <h4>Pod Scheduling Strategies</h4>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> nodeSelector &amp; nodeAffinity
-      </button>
+      <div class="expandable-header">
+        <h4>nodeSelector &amp; nodeAffinity</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           <code>nodeSelector</code> is the simplest constraint &mdash; a map of key-value label pairs that
@@ -206,9 +792,10 @@ kubectl label nodes dgx-node-01 nvidia.com/gpu.product=NVIDIA-H100-SXM5-80GB</co
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> podAffinity / podAntiAffinity
-      </button>
+      <div class="expandable-header">
+        <h4>podAffinity / podAntiAffinity</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           Pod affinity co-locates pods relative to other pods. For distributed training, you want all
@@ -240,9 +827,10 @@ kubectl label nodes dgx-node-01 nvidia.com/gpu.product=NVIDIA-H100-SXM5-80GB</co
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> Topology Spread Constraints
-      </button>
+      <div class="expandable-header">
+        <h4>Topology Spread Constraints</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           Topology spread constraints distribute pods evenly across topology domains. This is useful for
@@ -267,10 +855,10 @@ kubectl label nodes dgx-node-01 nvidia.com/gpu.product=NVIDIA-H100-SXM5-80GB</co
   </div>
 
   <!-- ============================================================
-       2. NVIDIA GPU OPERATOR
+       3. NVIDIA GPU OPERATOR
        ============================================================ -->
   <div class="subsection" id="gpu-operator">
-    <h3>2. NVIDIA GPU Operator</h3>
+    <h3>3. NVIDIA GPU Operator</h3>
 
     <div class="info-card">
       <h4>Automating the GPU Software Stack</h4>
@@ -489,10 +1077,10 @@ kubectl describe node dgx-node-01 | grep nvidia.com/gpu
   </div>
 
   <!-- ============================================================
-       3. NETWORK OPERATOR & RDMA IN K8S
+       4. NETWORK OPERATOR & RDMA IN K8S
        ============================================================ -->
   <div class="subsection" id="network-operator-rdma">
-    <h3>3. Network Operator &amp; RDMA in Kubernetes</h3>
+    <h3>4. Network Operator &amp; RDMA in Kubernetes</h3>
 
     <div class="info-card">
       <h4>NVIDIA Network Operator</h4>
@@ -750,10 +1338,10 @@ spec:
   </div>
 
   <!-- ============================================================
-       4. JOB SCHEDULING
+       5. JOB SCHEDULING
        ============================================================ -->
   <div class="subsection" id="job-scheduling">
-    <h3>4. Job Scheduling for Distributed Training</h3>
+    <h3>5. Job Scheduling for Distributed Training</h3>
 
     <div class="info-card">
       <h4>The Gang Scheduling Problem</h4>
@@ -1031,9 +1619,10 @@ spec:
     <h4>Priority, Preemption &amp; Resource Quotas</h4>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> PriorityClasses and Preemption
-      </button>
+      <div class="expandable-header">
+        <h4>PriorityClasses and Preemption</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <pre><code class="language-yaml"># PriorityClasses for GPU workload tiers
 apiVersion: scheduling.k8s.io/v1
@@ -1075,9 +1664,10 @@ description: "Interactive dev (lowest, non-preempting)"</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> Resource Quotas per Namespace/Team
-      </button>
+      <div class="expandable-header">
+        <h4>Resource Quotas per Namespace/Team</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <pre><code class="language-yaml"># ResourceQuota for team namespace
 apiVersion: v1
@@ -1122,10 +1712,605 @@ spec:
   </div>
 
   <!-- ============================================================
-       5. CONTAINER RUNTIME FOR GPUs
+       6. SLURM WORKLOAD MANAGER
+       ============================================================ -->
+  <div class="subsection" id="slurm-workload-manager">
+    <h3>6. Slurm Workload Manager</h3>
+
+    <div class="info-card">
+      <h4>The HPC Standard</h4>
+      <p>
+        <strong>Slurm</strong> (Simple Linux Utility for Resource Management) is the dominant workload
+        manager in High-Performance Computing, used by the majority of the world's TOP500 supercomputers.
+        While Kubernetes has become the standard for cloud-native GPU workloads, Slurm remains deeply
+        entrenched in traditional HPC, national labs, and many GPU training clusters &mdash; including
+        NVIDIA's own DGX SuperPOD reference architectures. Many large AI organizations run <em>both</em>
+        Slurm and Kubernetes: Slurm for large-scale batch training (where its mature gang scheduling,
+        backfill algorithms, and MPI integration excel) and Kubernetes for inference serving, interactive
+        notebooks, and CI/CD pipelines.
+      </p>
+    </div>
+
+    <h4>Slurm Architecture</h4>
+    <p>
+      Slurm uses a centralized controller model with lightweight daemons on each compute node:
+    </p>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Daemon</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Controller</strong></td>
+            <td><code>slurmctld</code></td>
+            <td>
+              Central management daemon that runs on the head node(s). Monitors resources, accepts job
+              submissions, makes scheduling decisions, and manages the job queue. Can run in HA mode
+              with a backup controller for failover. Reads the cluster configuration from
+              <code>slurm.conf</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Compute Daemon</strong></td>
+            <td><code>slurmd</code></td>
+            <td>
+              Runs on every compute node. Accepts work from <code>slurmctld</code>, launches and monitors
+              job steps, reports node status (CPU, memory, GPU utilization), and manages job cleanup.
+              Analogous to Kubernetes' <code>kubelet</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Database Daemon</strong></td>
+            <td><code>slurmdbd</code></td>
+            <td>
+              Optional but recommended. Provides a database interface for job accounting, usage tracking,
+              and fair-share scheduling history. Stores data in MySQL/MariaDB. Enables <code>sacct</code>
+              queries for historical job analysis and <code>sshare</code> for fair-share reporting.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>REST API</strong></td>
+            <td><code>slurmrestd</code></td>
+            <td>
+              REST API daemon (Slurm 20.02+) that exposes job submission, queue status, and node
+              information via HTTP. Enables integration with web portals, monitoring systems, and
+              custom job submission tools.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- SVG Diagram: Slurm Architecture -->
+    <div class="diagram-container">
+      <h4>Slurm Cluster Architecture</h4>
+      <svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Slurm architecture showing slurmctld, slurmd, slurmdbd, and user interaction flow">
+        <defs>
+          <marker id="slurm-arrow" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#76b900"/>
+          </marker>
+        </defs>
+
+        <!-- Background -->
+        <rect x="0" y="0" width="900" height="420" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+
+        <!-- User / Login Node -->
+        <rect x="20" y="30" width="180" height="100" rx="8" fill="#1a365d" stroke="#63b3ed" stroke-width="2"/>
+        <text x="110" y="58" fill="#63b3ed" font-size="13" text-anchor="middle" font-weight="bold">Login Node</text>
+        <text x="110" y="78" fill="#90cdf4" font-size="10" text-anchor="middle">User submits jobs</text>
+        <text x="110" y="95" fill="#7dd3fc" font-size="9" text-anchor="middle">sbatch, srun, squeue</text>
+        <text x="110" y="110" fill="#7dd3fc" font-size="9" text-anchor="middle">scancel, sinfo, sacct</text>
+
+        <!-- slurmctld -->
+        <rect x="280" y="20" width="200" height="120" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="2"/>
+        <text x="380" y="48" fill="#76b900" font-size="14" text-anchor="middle" font-weight="bold">slurmctld</text>
+        <text x="380" y="68" fill="#a3e635" font-size="10" text-anchor="middle">Central Controller</text>
+        <text x="380" y="88" fill="#94a3b8" font-size="9" text-anchor="middle">Job scheduling &amp; queue management</text>
+        <text x="380" y="103" fill="#94a3b8" font-size="9" text-anchor="middle">Resource allocation (GRES/GPU)</text>
+        <text x="380" y="118" fill="#94a3b8" font-size="9" text-anchor="middle">Partition &amp; QOS enforcement</text>
+
+        <!-- slurmdbd -->
+        <rect x="560" y="30" width="180" height="100" rx="8" fill="#312e81" stroke="#818cf8" stroke-width="2"/>
+        <text x="650" y="58" fill="#818cf8" font-size="13" text-anchor="middle" font-weight="bold">slurmdbd</text>
+        <text x="650" y="78" fill="#a5b4fc" font-size="10" text-anchor="middle">Accounting Database</text>
+        <text x="650" y="95" fill="#c4b5fd" font-size="9" text-anchor="middle">MySQL / MariaDB backend</text>
+        <text x="650" y="110" fill="#c4b5fd" font-size="9" text-anchor="middle">Job history &amp; fair-share</text>
+
+        <!-- slurmrestd -->
+        <rect x="770" y="30" width="110" height="100" rx="8" fill="#2d3748" stroke="#f6ad55" stroke-width="1.5"/>
+        <text x="825" y="58" fill="#f6ad55" font-size="11" text-anchor="middle" font-weight="bold">slurmrestd</text>
+        <text x="825" y="78" fill="#fbd38d" font-size="9" text-anchor="middle">REST API</text>
+        <text x="825" y="95" fill="#fbd38d" font-size="9" text-anchor="middle">HTTP/JSON</text>
+
+        <!-- Compute nodes -->
+        <rect x="20" y="200" width="200" height="200" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1.5"/>
+        <text x="120" y="225" fill="#76b900" font-size="12" text-anchor="middle" font-weight="bold">DGX Node 1</text>
+        <rect x="35" y="238" width="170" height="28" rx="4" fill="#2d3748" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="120" y="257" fill="#e2e8f0" font-size="10" text-anchor="middle">slurmd</text>
+        <rect x="35" y="275" width="170" height="35" rx="4" fill="#0f1a0f" stroke="#76b900" stroke-width="1"/>
+        <text x="120" y="297" fill="#76b900" font-size="10" text-anchor="middle">8x H100 GPUs (GRES)</text>
+        <rect x="35" y="320" width="170" height="25" rx="4" fill="#1a0f1f" stroke="#f6ad55" stroke-width="1"/>
+        <text x="120" y="337" fill="#f6ad55" font-size="9" text-anchor="middle">8x CX-7 400G NICs</text>
+        <rect x="35" y="355" width="170" height="25" rx="4" fill="#065f46" stroke="#10b981" stroke-width="1"/>
+        <text x="120" y="372" fill="#6ee7b7" font-size="9" text-anchor="middle">Job Step 0: train.py</text>
+
+        <rect x="250" y="200" width="200" height="200" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1.5"/>
+        <text x="350" y="225" fill="#76b900" font-size="12" text-anchor="middle" font-weight="bold">DGX Node 2</text>
+        <rect x="265" y="238" width="170" height="28" rx="4" fill="#2d3748" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="350" y="257" fill="#e2e8f0" font-size="10" text-anchor="middle">slurmd</text>
+        <rect x="265" y="275" width="170" height="35" rx="4" fill="#0f1a0f" stroke="#76b900" stroke-width="1"/>
+        <text x="350" y="297" fill="#76b900" font-size="10" text-anchor="middle">8x H100 GPUs (GRES)</text>
+        <rect x="265" y="320" width="170" height="25" rx="4" fill="#1a0f1f" stroke="#f6ad55" stroke-width="1"/>
+        <text x="350" y="337" fill="#f6ad55" font-size="9" text-anchor="middle">8x CX-7 400G NICs</text>
+        <rect x="265" y="355" width="170" height="25" rx="4" fill="#065f46" stroke="#10b981" stroke-width="1"/>
+        <text x="350" y="372" fill="#6ee7b7" font-size="9" text-anchor="middle">Job Step 0: train.py</text>
+
+        <rect x="480" y="200" width="200" height="200" rx="8" fill="#1a202c" stroke="#76b900" stroke-width="1.5" stroke-dasharray="6,3"/>
+        <text x="580" y="225" fill="#76b900" font-size="12" text-anchor="middle" font-weight="bold">DGX Node 3..N</text>
+        <text x="580" y="310" fill="#4a5568" font-size="24" text-anchor="middle">...</text>
+        <text x="580" y="345" fill="#94a3b8" font-size="10" text-anchor="middle">Same pattern per node</text>
+
+        <!-- Shared Storage -->
+        <rect x="710" y="220" width="170" height="160" rx="8" fill="#312e81" stroke="#818cf8" stroke-width="1.5"/>
+        <text x="795" y="248" fill="#818cf8" font-size="12" text-anchor="middle" font-weight="bold">Shared Storage</text>
+        <text x="795" y="275" fill="#a5b4fc" font-size="10" text-anchor="middle">Lustre / GPFS</text>
+        <text x="795" y="295" fill="#c4b5fd" font-size="9" text-anchor="middle">/data (datasets)</text>
+        <text x="795" y="312" fill="#c4b5fd" font-size="9" text-anchor="middle">/checkpoints</text>
+        <text x="795" y="329" fill="#c4b5fd" font-size="9" text-anchor="middle">/home (user dirs)</text>
+        <text x="795" y="346" fill="#c4b5fd" font-size="9" text-anchor="middle">/scratch (temp)</text>
+        <text x="795" y="366" fill="#94a3b8" font-size="9" text-anchor="middle">Mounted on all nodes</text>
+
+        <!-- Arrows -->
+        <line x1="200" y1="80" x2="280" y2="80" stroke="#63b3ed" stroke-width="1.5" marker-end="url(#slurm-arrow)"/>
+        <line x1="480" y1="80" x2="560" y2="80" stroke="#818cf8" stroke-width="1.5" marker-end="url(#slurm-arrow)"/>
+        <line x1="740" y1="80" x2="770" y2="80" stroke="#f6ad55" stroke-width="1" marker-end="url(#slurm-arrow)"/>
+
+        <line x1="380" y1="140" x2="120" y2="200" stroke="#76b900" stroke-width="1.5" marker-end="url(#slurm-arrow)"/>
+        <line x1="380" y1="140" x2="350" y2="200" stroke="#76b900" stroke-width="1.5" marker-end="url(#slurm-arrow)"/>
+        <line x1="380" y1="140" x2="580" y2="200" stroke="#76b900" stroke-width="1.5" marker-end="url(#slurm-arrow)"/>
+
+        <line x1="680" y1="300" x2="710" y2="300" stroke="#818cf8" stroke-width="1" stroke-dasharray="4,2"/>
+        <line x1="450" y1="300" x2="480" y2="300" stroke="#818cf8" stroke-width="1" stroke-dasharray="4,2"/>
+        <line x1="220" y1="300" x2="250" y2="300" stroke="#818cf8" stroke-width="1" stroke-dasharray="4,2"/>
+
+        <!-- Labels -->
+        <text x="232" y="68" fill="#63b3ed" font-size="9">sbatch</text>
+        <text x="510" y="68" fill="#818cf8" font-size="9">accounting</text>
+        <text x="300" y="168" fill="#76b900" font-size="9">dispatch jobs</text>
+      </svg>
+    </div>
+
+    <h4>Key Concepts</h4>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Partitions &amp; QOS</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          A <strong>partition</strong> is a logical grouping of nodes, similar to a queue. Each partition
+          defines which nodes are available, time limits, priority, and access controls. Think of partitions
+          as different "lanes" for different types of work:
+        </p>
+        <div class="spec-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Partition</th>
+                <th>Nodes</th>
+                <th>Time Limit</th>
+                <th>Use Case</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>batch</code></td>
+                <td>dgx[001-032]</td>
+                <td>72 hours</td>
+                <td>Long-running training jobs</td>
+              </tr>
+              <tr>
+                <td><code>interactive</code></td>
+                <td>dgx[001-004]</td>
+                <td>8 hours</td>
+                <td>Debugging, Jupyter, interactive dev</td>
+              </tr>
+              <tr>
+                <td><code>preemptible</code></td>
+                <td>dgx[001-032]</td>
+                <td>24 hours</td>
+                <td>Low-priority, can be preempted</td>
+              </tr>
+              <tr>
+                <td><code>inference</code></td>
+                <td>dgx[033-040]</td>
+                <td>Unlimited</td>
+                <td>Model serving (long-running)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <strong>Quality of Service (QOS)</strong> adds another layer of control on top of partitions,
+          allowing per-user or per-group limits on the number of jobs, GPUs, wall time, and priority.
+          QOS policies can also enable preemption: a high-QOS job can preempt a lower-QOS job to access GPUs.
+        </p>
+        <pre><code class="language-bash"># slurm.conf partition definitions
+PartitionName=batch Nodes=dgx[001-032] MaxTime=3-00:00:00 Default=YES State=UP
+PartitionName=interactive Nodes=dgx[001-004] MaxTime=08:00:00 State=UP
+PartitionName=preemptible Nodes=dgx[001-032] MaxTime=1-00:00:00 PreemptMode=REQUEUE State=UP
+
+# QOS definitions (via sacctmgr)
+sacctmgr add qos high-priority set Priority=1000 MaxTRESPerUser=gpu=128
+sacctmgr add qos normal set Priority=500 MaxTRESPerUser=gpu=64
+sacctmgr add qos low-priority set Priority=100 MaxTRESPerUser=gpu=16 Preempt=normal,high-priority</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>GRES: GPU Scheduling in Slurm</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <p>
+          <strong>Generic Resources (GRES)</strong> is Slurm's mechanism for scheduling GPUs and other
+          specialized hardware. Each node declares its GPU inventory, and users request GPUs in their
+          job submissions. Slurm tracks GPU allocation per node, preventing oversubscription.
+        </p>
+        <pre><code class="language-bash"># gres.conf — declares GPU resources on each node
+# Placed on every compute node at /etc/slurm/gres.conf
+
+# AutoDetect lets Slurm discover GPUs via NVML
+AutoDetect=nvml
+
+# Or manually specify (useful when AutoDetect isn't available):
+# Name=gpu Type=h100 File=/dev/nvidia[0-7] Count=8
+
+# slurm.conf — enable GRES and configure GPU types
+GresTypes=gpu
+NodeName=dgx[001-032] Gres=gpu:h100:8 CPUs=128 RealMemory=2048000 State=UNKNOWN
+
+# This tells Slurm: each dgx node has 8 H100 GPUs, 128 CPUs, ~2TB RAM</code></pre>
+        <pre><code class="language-bash"># Requesting GPUs in job submissions
+sbatch --gres=gpu:8 train.sh          # Request 8 GPUs (any type)
+sbatch --gres=gpu:h100:4 train.sh     # Request 4 H100 GPUs specifically
+sbatch --gres=gpu:8 -N 4 train.sh     # 8 GPUs per node, across 4 nodes (32 total)
+
+# GPU binding options for NUMA/topology awareness
+srun --gres=gpu:8 --gpu-bind=closest python train.py
+# --gpu-bind=closest: bind each task to GPUs on the same NUMA node
+# --gpu-bind=map_gpu:0,1,2,3: explicitly map tasks to GPU indices</code></pre>
+      </div>
+    </div>
+
+    <h4>Essential Slurm Commands</h4>
+    <pre><code class="language-bash"># --- Cluster Status ---
+sinfo                                   # Show partition and node status
+sinfo -N -l                             # Detailed per-node information
+sinfo -p batch --Format=NodeList,Gres,GresUsed,CPUsState,Memory
+#  NODELIST    GRES          GRES_USED             CPUS(A/I/O/T)  MEMORY
+#  dgx001      gpu:h100:8    gpu:h100:8(S:0-7)     128/0/0/128    2048000
+#  dgx002      gpu:h100:8    gpu:h100:0(S:0)        0/128/0/128    2048000
+
+# --- Job Submission ---
+sbatch train.sh                         # Submit a batch job (returns job ID)
+srun --gres=gpu:1 --pty bash            # Start an interactive GPU session
+salloc --gres=gpu:8 -N 2               # Allocate resources (get a shell to run srun)
+
+# --- Queue Management ---
+squeue                                  # Show all queued and running jobs
+squeue -u $USER                         # Show only your jobs
+squeue -p batch --Format=JobID,Name,State,TimeUsed,NumNodes,Gres,Reason
+#  JOBID   NAME         STATE    TIME       NODES  GRES       REASON
+#  12345   llm-train    RUNNING  12:34:56   32     gpu:h100:8 None
+#  12346   eval-job     PENDING  0:00       1      gpu:h100:4 Resources
+
+# --- Job Control ---
+scancel 12345                           # Cancel a specific job
+scancel -u $USER                        # Cancel all your jobs
+scancel -p preemptible                  # Cancel all jobs in a partition
+scontrol hold 12346                     # Hold a pending job (don't schedule it)
+scontrol release 12346                  # Release a held job
+
+# --- Job Information ---
+sacct -j 12345 --format=JobID,Elapsed,MaxRSS,MaxVMSize,AllocGRES,ExitCode
+scontrol show job 12345                 # Detailed job information
+sstat -j 12345 --format=AveCPU,AveRSS,MaxRSS,AveVMSize  # Live stats for running job</code></pre>
+
+    <h4>GPU Training Job Scripts</h4>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Single-Node Multi-GPU Training</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <pre><code class="language-bash">#!/bin/bash
+#SBATCH --job-name=bert-finetune
+#SBATCH --partition=batch
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=8            # All 8 GPUs on one DGX node
+#SBATCH --cpus-per-task=64           # Half the CPUs for data loading
+#SBATCH --mem=512G
+#SBATCH --time=24:00:00
+#SBATCH --output=logs/%x_%j.out     # %x=job name, %j=job ID
+#SBATCH --error=logs/%x_%j.err
+
+# Load modules (site-specific)
+module load cuda/12.3 nccl/2.19
+
+# Activate conda or virtual environment
+source /home/$USER/envs/pytorch/bin/activate
+
+# Set NCCL environment variables
+export NCCL_DEBUG=WARN
+export NCCL_IB_HCA=mlx5
+
+# Run training with torchrun (PyTorch's distributed launcher)
+torchrun \
+  --standalone \
+  --nproc_per_node=8 \
+  train.py \
+    --model bert-large \
+    --batch-size 32 \
+    --learning-rate 0.0001 \
+    --epochs 100 \
+    --data-dir /data/datasets/wikipedia \
+    --checkpoint-dir /checkpoints/$SLURM_JOB_ID</code></pre>
+      </div>
+    </div>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>Multi-Node Distributed Training</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <pre><code class="language-bash">#!/bin/bash
+#SBATCH --job-name=llm-70b-pretrain
+#SBATCH --partition=batch
+#SBATCH --nodes=32                   # 32 DGX nodes
+#SBATCH --ntasks-per-node=8          # 8 tasks (1 per GPU)
+#SBATCH --gpus-per-node=8            # 8 GPUs per node = 256 total
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=0                      # Use all available memory
+#SBATCH --time=72:00:00
+#SBATCH --exclusive                  # No sharing — full node access
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+# Get the master node address for rendezvous
+export MASTER_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n1)
+export MASTER_PORT=29500
+
+# Slurm provides these automatically:
+# SLURM_NNODES=32          (number of nodes)
+# SLURM_NODELIST=dgx[001-032]
+# SLURM_PROCID             (global rank 0-255)
+# SLURM_LOCALID            (local rank 0-7 per node)
+# SLURM_NTASKS=256         (total tasks)
+
+# NCCL configuration for InfiniBand
+export NCCL_DEBUG=WARN
+export NCCL_IB_HCA=mlx5
+export NCCL_IB_GID_INDEX=3
+export NCCL_NET_GDR_LEVEL=PIX       # GPUDirect RDMA
+export NCCL_SOCKET_IFNAME=eth0
+
+# Launch with srun (Slurm's parallel launcher, replaces mpirun)
+srun --kill-on-bad-exit=1 \
+  torchrun \
+    --nproc_per_node=8 \
+    --nnodes=$SLURM_NNODES \
+    --node_rank=$SLURM_NODEID \
+    --master_addr=$MASTER_ADDR \
+    --master_port=$MASTER_PORT \
+    train_llm.py \
+      --model llama-70b \
+      --tensor-parallel-size 8 \
+      --pipeline-parallel-size 4 \
+      --data-parallel-size 8 \
+      --batch-size 2 \
+      --gradient-accumulation-steps 8 \
+      --fp8-training \
+      --data-dir /data/datasets/c4 \
+      --checkpoint-dir /checkpoints/$SLURM_JOB_ID \
+      --checkpoint-interval 1000</code></pre>
+        <p>
+          <strong>Key difference from Kubernetes:</strong> Slurm natively provides gang scheduling
+          for multi-node jobs &mdash; all 32 nodes are allocated simultaneously or the job waits in
+          the queue. There is no partial-scheduling deadlock problem. Slurm's backfill scheduler also
+          excels at packing smaller jobs into gaps while large jobs wait, maximizing overall GPU utilization.
+        </p>
+      </div>
+    </div>
+
+    <h4>Pyxis &amp; Enroot: Containers in Slurm</h4>
+    <div class="info-card">
+      <h4>Container Integration</h4>
+      <p>
+        Traditional Slurm runs jobs directly on the host OS, but modern GPU workloads benefit enormously
+        from containerization (reproducible environments, dependency isolation, version pinning). NVIDIA's
+        <strong>Enroot</strong> is a lightweight container runtime designed for HPC &mdash; it turns Docker/OCI
+        images into unprivileged "sandboxes" without requiring root or a daemon. <strong>Pyxis</strong> is a
+        Slurm SPANK plugin that integrates Enroot directly into Slurm, allowing users to specify a container
+        image in their <code>srun</code>/<code>sbatch</code> commands.
+      </p>
+    </div>
+
+    <pre><code class="language-bash"># Using Pyxis to run a containerized training job
+srun --gres=gpu:8 \
+  --container-image=nvcr.io/nvidia/pytorch:24.01-py3 \
+  --container-mounts=/data:/data,/checkpoints:/checkpoints \
+  --no-container-mount-home \
+  python train.py --model bert-large --batch-size 32
+
+# Multi-node container job
+sbatch --nodes=4 --gpus-per-node=8 \
+  --container-image=nvcr.io/nvidia/pytorch:24.01-py3 \
+  --container-mounts=/data:/data,/home/$USER:/workspace \
+  train_distributed.sh
+
+# Enroot standalone usage (import and run without Pyxis)
+enroot import 'docker://nvcr.io/nvidia/pytorch:24.01-py3'  # Creates a .sqsh file
+enroot create --name pytorch nvcr.io+nvidia+pytorch+24.01-py3.sqsh
+enroot start --rw --mount /data:/data pytorch python train.py</code></pre>
+
+    <h4>Slurm vs. Kubernetes: When to Use What</h4>
+
+    <div class="spec-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th>Slurm</th>
+            <th>Kubernetes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Primary strength</strong></td>
+            <td>Batch job scheduling, MPI, HPC</td>
+            <td>Microservices, declarative APIs, ecosystem</td>
+          </tr>
+          <tr>
+            <td><strong>Gang scheduling</strong></td>
+            <td>Native, battle-tested for decades</td>
+            <td>Requires Volcano or Kueue (newer, maturing)</td>
+          </tr>
+          <tr>
+            <td><strong>GPU awareness</strong></td>
+            <td>GRES with topology binding, NVML auto-detect</td>
+            <td>Device Plugin + GPU Operator + GFD</td>
+          </tr>
+          <tr>
+            <td><strong>MPI support</strong></td>
+            <td>First-class (PMIx, srun as MPI launcher)</td>
+            <td>Requires MPI Operator (Kubeflow)</td>
+          </tr>
+          <tr>
+            <td><strong>Container model</strong></td>
+            <td>Optional (Pyxis/Enroot), bare-metal native</td>
+            <td>Containers are mandatory and first-class</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-tenancy</strong></td>
+            <td>Accounts, QOS, fair-share (mature)</td>
+            <td>Namespaces, RBAC, ResourceQuotas, Kueue</td>
+          </tr>
+          <tr>
+            <td><strong>Service hosting</strong></td>
+            <td>Not designed for long-running services</td>
+            <td>Native (Deployments, Services, Ingress)</td>
+          </tr>
+          <tr>
+            <td><strong>Auto-scaling</strong></td>
+            <td>Limited (cloud bursting via plugins)</td>
+            <td>Native (HPA, VPA, Cluster Autoscaler)</td>
+          </tr>
+          <tr>
+            <td><strong>Ecosystem</strong></td>
+            <td>HPC-centric (modules, Lmod, Spack)</td>
+            <td>Cloud-native (Helm, Operators, Prometheus, Istio)</td>
+          </tr>
+          <tr>
+            <td><strong>Best for</strong></td>
+            <td>Large-scale batch training, HPC simulation</td>
+            <td>Inference serving, MLOps, CI/CD, mixed workloads</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-info">
+      <h5>Hybrid Clusters</h5>
+      <p>
+        Many production GPU clusters run <strong>both</strong> Slurm and Kubernetes side-by-side. A common
+        pattern dedicates a pool of DGX nodes to Slurm for large training jobs (where gang scheduling and
+        backfill are critical) and another pool to Kubernetes for inference, notebooks, and model serving
+        (where the K8s ecosystem excels). Some organizations use tools like <strong>NVIDIA Base Command
+        Manager</strong> or <strong>Run:ai</strong> to present a unified interface over both schedulers,
+        or run Kubernetes <em>within</em> Slurm allocations (srun launches a temporary K8s cluster for
+        each training job).
+      </p>
+    </div>
+
+    <h4>Slurm Configuration Essentials</h4>
+
+    <div class="expandable">
+      <div class="expandable-header">
+        <h4>slurm.conf for a DGX SuperPOD</h4>
+        <span class="expand-icon">+</span>
+      </div>
+      <div class="expandable-content">
+        <pre><code class="language-bash"># /etc/slurm/slurm.conf — Key settings for GPU clusters
+
+# --- Controller ---
+ClusterName=superpod
+SlurmctldHost=slurm-ctrl-01
+SlurmctldHost=slurm-ctrl-02           # HA backup controller
+SlurmctldPort=6817
+SlurmdPort=6818
+
+# --- Scheduling ---
+SchedulerType=sched/backfill           # Backfill scheduler (most common)
+SelectType=select/cons_tres            # Track consumable resources (CPU, mem, GPU)
+SelectTypeParameters=CR_Core_Memory    # Allocate by core and memory
+PreemptType=preempt/qos               # Enable QOS-based preemption
+PreemptMode=REQUEUE                    # Preempted jobs are re-queued
+
+# --- GPU (GRES) ---
+GresTypes=gpu
+# Topology-aware GPU scheduling
+TaskPlugin=task/affinity,task/cgroup
+# Constrain GPUs to allocated set using cgroups
+PrologFlags=Contain
+JobAcctGatherType=jobacct_gather/cgroup
+
+# --- Accounting ---
+AccountingStorageType=accounting_storage/slurmdbd
+AccountingStorageHost=slurm-db-01
+JobCompType=jobcomp/elasticsearch      # Optional: send completed jobs to ES
+
+# --- Timeouts ---
+SlurmdTimeout=300                      # Mark node DOWN after 5min no heartbeat
+InactiveLimit=0                        # Don't kill idle interactive jobs
+MinJobAge=86400                        # Keep completed jobs for 24h
+
+# --- Logging ---
+SlurmctldLogFile=/var/log/slurm/slurmctld.log
+SlurmdLogFile=/var/log/slurm/slurmd.log
+SlurmctldDebug=info
+
+# --- Node Definitions ---
+NodeName=dgx[001-032] Gres=gpu:h100:8 CPUs=128 Boards=1 \
+  SocketsPerBoard=2 CoresPerSocket=64 ThreadsPerCore=1 \
+  RealMemory=2048000 State=UNKNOWN
+
+# --- Partitions ---
+PartitionName=batch Nodes=dgx[001-032] Default=YES MaxTime=3-00:00:00 State=UP \
+  OverSubscribe=EXCLUSIVE
+PartitionName=interactive Nodes=dgx[001-004] MaxTime=08:00:00 State=UP
+PartitionName=preemptible Nodes=dgx[001-032] MaxTime=1-00:00:00 \
+  PreemptMode=REQUEUE State=UP</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       7. CONTAINER RUNTIME FOR GPUs
        ============================================================ -->
   <div class="subsection" id="container-runtime-gpu">
-    <h3>5. Container Runtime for GPUs</h3>
+    <h3>7. Container Runtime for GPUs</h3>
 
     <div class="info-card">
       <h4>How GPU Access Works in Containers</h4>
@@ -1223,10 +2408,10 @@ nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
   </div>
 
   <!-- ============================================================
-       6. SERVICE MESH & NETWORKING IN K8S
+       8. SERVICE MESH & NETWORKING IN K8S
        ============================================================ -->
   <div class="subsection" id="service-mesh-networking">
-    <h3>6. Service Mesh &amp; Networking in Kubernetes</h3>
+    <h3>8. Service Mesh &amp; Networking in Kubernetes</h3>
 
     <p>
       The management-plane network in a GPU cluster handles API server communication, pod-to-pod
@@ -1351,10 +2536,10 @@ spec:
   </div>
 
   <!-- ============================================================
-       7. CLUSTER MANAGEMENT AT SCALE
+       9. CLUSTER MANAGEMENT AT SCALE
        ============================================================ -->
   <div class="subsection" id="cluster-management">
-    <h3>7. Cluster Management at Scale</h3>
+    <h3>9. Cluster Management at Scale</h3>
 
     <div class="info-card">
       <h4>Day-0 through Day-2 Operations</h4>
@@ -1367,9 +2552,10 @@ spec:
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> Bare-Metal Provisioning: PXE Boot &amp; MAAS
-      </button>
+      <div class="expandable-header">
+        <h4>Bare-Metal Provisioning: PXE Boot &amp; MAAS</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           DGX nodes are provisioned via PXE (Preboot Execution Environment) boot. The process:
@@ -1432,9 +2618,10 @@ spec:
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> Cluster API for Kubernetes Lifecycle
-      </button>
+      <div class="expandable-header">
+        <h4>Cluster API for Kubernetes Lifecycle</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           <strong>Cluster API (CAPI)</strong> is a Kubernetes sub-project that uses declarative,
@@ -1486,9 +2673,10 @@ spec:
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> GitOps with ArgoCD
-      </button>
+      <div class="expandable-header">
+        <h4>GitOps with ArgoCD</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           <strong>ArgoCD</strong> implements GitOps for Kubernetes &mdash; the desired cluster state
@@ -1557,9 +2745,10 @@ spec:
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        <span class="toggle-icon">+</span> Helm Charts &amp; Kustomize
-      </button>
+      <div class="expandable-header">
+        <h4>Helm Charts &amp; Kustomize</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           <strong>Helm</strong> packages Kubernetes manifests as charts with templated values,

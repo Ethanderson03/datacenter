@@ -583,79 +583,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const expandables = qsa('.expandable');
 
     expandables.forEach((panel) => {
-      const header =
-        qs('.expandable-header', panel) ||
-        qs('.expandable-title', panel) ||
-        qs('h3', panel) ||
-        qs('h4', panel);
-
-      if (!header) return;
-
-      // Ensure the header has a toggle indicator if not present
-      if (!qs('.expand-icon', header)) {
-        const icon = createElement('span', {
-          className: 'expand-icon',
-          'aria-hidden': 'true',
-          innerHTML: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-        });
-        header.appendChild(icon);
-      }
-
-      // Set ARIA attributes
-      header.setAttribute('role', 'button');
-      header.setAttribute('tabindex', '0');
-      header.setAttribute(
-        'aria-expanded',
-        panel.classList.contains('expanded') ? 'true' : 'false'
-      );
-
       const content =
         qs('.expandable-content', panel) || qs('.expandable-body', panel);
+      panel.classList.add('expanded');
+
       if (content) {
-        const contentId =
-          content.id || `expandable-content-${Math.random().toString(36).slice(2, 9)}`;
-        content.id = contentId;
-        header.setAttribute('aria-controls', contentId);
-      }
-
-      // Click handler
-      header.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isExpanded = panel.classList.toggle('expanded');
-        header.setAttribute('aria-expanded', String(isExpanded));
-
-        // Animate content height
-        if (content) {
-          if (isExpanded) {
-            content.style.maxHeight = content.scrollHeight + 'px';
-            // After transition, set to none so inner content can grow
-            const onTransitionEnd = () => {
-              content.style.maxHeight = 'none';
-              content.removeEventListener('transitionend', onTransitionEnd);
-            };
-            content.addEventListener('transitionend', onTransitionEnd);
-          } else {
-            // Set explicit height first, then trigger collapse
-            content.style.maxHeight = content.scrollHeight + 'px';
-            // Force reflow
-            content.offsetHeight; // eslint-disable-line no-unused-expressions
-            content.style.maxHeight = '0';
-          }
-        }
-      });
-
-      // Keyboard handler
-      header.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          header.click();
-        }
-      });
-
-      // Initialize collapsed state
-      if (content && !panel.classList.contains('expanded')) {
-        content.style.maxHeight = '0';
-        content.style.overflow = 'hidden';
+        content.style.maxHeight = 'none';
+        content.style.overflow = 'visible';
       }
     });
   }

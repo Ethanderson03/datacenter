@@ -1,7 +1,11 @@
 <section id="virtual-networking" class="content-section" data-layer="4">
 
   <div class="section-header">
-    <h2>Virtual Networking &amp; Overlay Fabrics</h2>
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="4">Layer 4</span>
+      <span class="section-number">06</span>
+    </div>
+    <h1 class="section-title">Virtual Networking &amp; Overlay Fabrics</h1>
     <p class="section-subtitle">Software-defined networking with Open vSwitch, VXLAN overlays, DPDK acceleration, and hardware offload for GPU-dense HPC clusters</p>
   </div>
 
@@ -67,7 +71,10 @@
     <h4>Key Concepts</h4>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">Bridges (br0, br-int, br-ex)</button>
+      <div class="expandable-header">
+        <h4>Bridges (br0, br-int, br-ex)</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           An OVS bridge is a virtual Ethernet switch, analogous to a physical L2 switch. Each bridge
@@ -83,7 +90,10 @@
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">Ports: internal, system, tap, patch, VXLAN, GRE</button>
+      <div class="expandable-header">
+        <h4>Ports: internal, system, tap, patch, VXLAN, GRE</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <div class="spec-table">
           <table>
@@ -137,7 +147,10 @@
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">OpenFlow Rules: Matching, Actions &amp; Multi-Table Pipeline</button>
+      <div class="expandable-header">
+        <h4>OpenFlow Rules: Matching, Actions &amp; Multi-Table Pipeline</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           OVS implements the OpenFlow protocol (versions 1.0 through 1.5). Each bridge has up to
@@ -470,86 +483,29 @@ journalctl -u ovs-vswitchd --no-pager -n 50</code></pre>
     </p>
 
     <!-- VXLAN Encapsulation SVG -->
-    <div class="diagram-container">
+    <div class="mermaid-container">
       <h4>VXLAN Packet Encapsulation</h4>
-      <svg viewBox="0 0 920 370" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VXLAN encapsulation diagram showing the full packet with each header layer labeled and byte sizes">
+      <pre class="mermaid">
+graph LR
+    A["Outer Ethernet\n14 bytes\nDst MAC | Src MAC | 0x0800"] --> B["Outer IP Header\n20 bytes\nSrc: VTEP local | Dst: VTEP remote\nProto: UDP (17)"]
+    B --> C["Outer UDP Header\n8 bytes\nSrc Port: entropy | Dst Port: 4789"]
+    C --> D["VXLAN Header\n8 bytes\nFlags (I=1) | VNI (24-bit)\n0 - 16,777,215"]
+    D --> E["Inner Dst MAC\n6 bytes"]
+    E --> F["Inner Src MAC\n6 bytes"]
+    F --> G["EtherType\n2 bytes"]
+    G --> H["Inner IP Header\n20 bytes (IPv4)"]
+    H --> I["Inner Payload\nTCP/UDP + Data\nvariable"]
 
-        <!-- Title -->
-        <text x="460" y="30" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">VXLAN Encapsulated Packet Structure</text>
-
-        <!-- Original Frame (innermost) -->
-        <text x="460" y="65" fill="#76b900" font-size="13" font-weight="bold" text-anchor="middle">Original L2 Frame (Inner Payload)</text>
-
-        <rect x="80" y="78" width="130" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
-        <text x="145" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner Dst MAC</text>
-        <text x="145" y="116" fill="#888" font-size="10" text-anchor="middle">6 bytes</text>
-
-        <rect x="215" y="78" width="130" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
-        <text x="280" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner Src MAC</text>
-        <text x="280" y="116" fill="#888" font-size="10" text-anchor="middle">6 bytes</text>
-
-        <rect x="350" y="78" width="100" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
-        <text x="400" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">EtherType</text>
-        <text x="400" y="116" fill="#888" font-size="10" text-anchor="middle">2 bytes</text>
-
-        <rect x="455" y="78" width="180" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
-        <text x="545" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner IP Header</text>
-        <text x="545" y="116" fill="#888" font-size="10" text-anchor="middle">20 bytes (IPv4)</text>
-
-        <rect x="640" y="78" width="200" height="45" rx="4" fill="#1a3300" stroke="#76b900" stroke-width="2"/>
-        <text x="740" y="100" fill="#76b900" font-size="12" font-weight="bold" text-anchor="middle">Inner Payload (TCP/UDP + Data)</text>
-        <text x="740" y="116" fill="#888" font-size="10" text-anchor="middle">variable</text>
-
-        <!-- VXLAN Header -->
-        <text x="460" y="155" fill="#ffab00" font-size="13" font-weight="bold" text-anchor="middle">VXLAN Header (8 bytes)</text>
-
-        <rect x="130" y="168" width="200" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
-        <text x="230" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">Flags (8 bits)</text>
-        <text x="230" y="206" fill="#888" font-size="10" text-anchor="middle">I flag = 1 (VNI valid)</text>
-
-        <rect x="335" y="168" width="120" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
-        <text x="395" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">Reserved</text>
-        <text x="395" y="206" fill="#888" font-size="10" text-anchor="middle">24 bits</text>
-
-        <rect x="460" y="168" width="200" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
-        <text x="560" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">VNI (24 bits)</text>
-        <text x="560" y="206" fill="#888" font-size="10" text-anchor="middle">0 &ndash; 16,777,215</text>
-
-        <rect x="665" y="168" width="120" height="45" rx="4" fill="#332a00" stroke="#ffab00" stroke-width="2"/>
-        <text x="725" y="190" fill="#ffab00" font-size="12" font-weight="bold" text-anchor="middle">Reserved</text>
-        <text x="725" y="206" fill="#888" font-size="10" text-anchor="middle">8 bits</text>
-
-        <!-- UDP Header -->
-        <text x="460" y="244" fill="#448aff" font-size="13" font-weight="bold" text-anchor="middle">Outer UDP Header (8 bytes)</text>
-
-        <rect x="130" y="256" width="200" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
-        <text x="230" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Src Port (entropy)</text>
-
-        <rect x="335" y="256" width="200" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
-        <text x="435" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Dst Port: 4789</text>
-
-        <rect x="540" y="256" width="120" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
-        <text x="600" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Length</text>
-
-        <rect x="665" y="256" width="120" height="40" rx="4" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
-        <text x="725" y="280" fill="#448aff" font-size="12" font-weight="bold" text-anchor="middle">Checksum</text>
-
-        <!-- Outer IP Header -->
-        <text x="300" y="325" fill="#e040fb" font-size="13" font-weight="bold" text-anchor="middle">Outer IP Header (20 bytes)</text>
-        <rect x="130" y="335" width="340" height="30" rx="4" fill="#1a0d26" stroke="#e040fb" stroke-width="2"/>
-        <text x="300" y="356" fill="#e040fb" font-size="11" text-anchor="middle">Src: VTEP IP (local) &nbsp;&nbsp;|&nbsp;&nbsp; Dst: VTEP IP (remote) &nbsp;&nbsp;|&nbsp;&nbsp; Proto: UDP (17)</text>
-
-        <!-- Outer Ethernet -->
-        <text x="660" y="325" fill="#ff6e40" font-size="13" font-weight="bold" text-anchor="middle">Outer Ethernet (14 bytes)</text>
-        <rect x="500" y="335" width="320" height="30" rx="4" fill="#1f0d0d" stroke="#ff6e40" stroke-width="2"/>
-        <text x="660" y="356" fill="#ff6e40" font-size="11" text-anchor="middle">Outer Dst MAC &nbsp;|&nbsp; Outer Src MAC &nbsp;|&nbsp; EtherType 0x0800</text>
-
-        <!-- Overhead annotation -->
-        <rect x="10" y="248" width="110" height="55" rx="4" fill="#2a0a0a" stroke="#ff5252" stroke-width="1.5"/>
-        <text x="65" y="268" fill="#ff5252" font-size="12" font-weight="bold" text-anchor="middle">+50 bytes</text>
-        <text x="65" y="285" fill="#ff5252" font-size="10" text-anchor="middle">overhead</text>
-        <text x="65" y="298" fill="#888" font-size="9" text-anchor="middle">14+20+8+8</text>
-      </svg>
+    style A fill:#1f0d0d,stroke:#ff6e40,color:#ff6e40
+    style B fill:#1a0d26,stroke:#e040fb,color:#e040fb
+    style C fill:#0d1a33,stroke:#448aff,color:#448aff
+    style D fill:#332a00,stroke:#ffab00,color:#ffab00
+    style E fill:#1a3300,stroke:#76b900,color:#76b900
+    style F fill:#1a3300,stroke:#76b900,color:#76b900
+    style G fill:#1a3300,stroke:#76b900,color:#76b900
+    style H fill:#1a3300,stroke:#76b900,color:#76b900
+    style I fill:#1a3300,stroke:#76b900,color:#76b900
+      </pre>
     </div>
 
     <h4>Key VXLAN Components</h4>
@@ -605,7 +561,10 @@ journalctl -u ovs-vswitchd --no-pager -n 50</code></pre>
     </p>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">EVPN Route Types</button>
+      <div class="expandable-header">
+        <h4>EVPN Route Types</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <div class="spec-table">
           <table>
@@ -829,111 +788,33 @@ ip netns exec tenant-router-1 iptables -t nat -A POSTROUTING \
 
     <h4>Typical VM-to-VM Packet Path (Cross-Host, VXLAN)</h4>
 
-    <!-- VM-to-VM Packet Path SVG -->
-    <div class="diagram-container">
+    <!-- VM-to-VM Packet Path Mermaid -->
+    <div class="mermaid-container">
       <h4>VM-to-VM Packet Path Through OVS &amp; VXLAN Overlay</h4>
-      <svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VM-to-VM packet path through OVS bridges, VXLAN tunnel, across physical network">
-        <defs>
-          <marker id="arrow-pkt1" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#76b900"/>
-          </marker>
-          <marker id="arrow-pkt2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#448aff"/>
-          </marker>
-        </defs>
+      <pre class="mermaid">
+graph LR
+    subgraph HostA["Compute Host A (10.100.0.1)"]
+        VM1["VM-A\n192.168.1.10"] --> tap0["tap0"]
+        tap0 --> brIntA["br-int\nOpenFlow pipeline\nVLAN tag assignment"]
+        brIntA --> patchA["patch port"]
+        patchA --> brTunA["br-tun\nVXLAN encap\nVNI=1000, UDP:4789"]
+        brTunA --> ethA["eth0 (100 GbE)"]
+    end
 
-        <!-- Host A -->
-        <rect x="20" y="15" width="430" height="380" rx="10" fill="#111820" stroke="#2a3a4e" stroke-width="2"/>
-        <text x="235" y="42" fill="#e0e0e0" font-size="14" font-weight="bold" text-anchor="middle">Compute Host A (10.100.0.1)</text>
+    subgraph Fabric["Physical L3 Fabric (Leaf-Spine)"]
+        net["IP routed underlay\nECMP | MTU 9216"]
+    end
 
-        <!-- VM A -->
-        <rect x="50" y="60" width="160" height="80" rx="6" fill="#0d2818" stroke="#76b900" stroke-width="2"/>
-        <text x="130" y="88" fill="#76b900" font-size="13" font-weight="bold" text-anchor="middle">VM-A</text>
-        <text x="130" y="108" fill="#888" font-size="10" text-anchor="middle">IP: 192.168.1.10</text>
-        <text x="130" y="123" fill="#888" font-size="10" text-anchor="middle">MAC: aa:bb:cc:00:00:01</text>
+    subgraph HostB["Compute Host B (10.100.0.2)"]
+        ethB["eth0 (100 GbE)"] --> brTunB["br-tun\nVXLAN decap\nVNI=1000 to local VLAN"]
+        brTunB --> patchB["patch port"]
+        patchB --> brIntB["br-int\nOpenFlow pipeline\nVNI to VLAN mapping"]
+        brIntB --> tap1["tap1"]
+        tap1 --> VM2["VM-B\n192.168.1.20"]
+    end
 
-        <!-- tap port -->
-        <rect x="100" y="150" width="60" height="25" rx="3" fill="#1a2332" stroke="#4fc3f7" stroke-width="1.5"/>
-        <text x="130" y="167" fill="#4fc3f7" font-size="10" text-anchor="middle">tap0</text>
-        <line x1="130" y1="140" x2="130" y2="150" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
-
-        <!-- br-int A -->
-        <rect x="40" y="190" width="200" height="70" rx="6" fill="#1a1a0d" stroke="#ffab00" stroke-width="2"/>
-        <text x="140" y="218" fill="#ffab00" font-size="13" font-weight="bold" text-anchor="middle">br-int</text>
-        <text x="140" y="238" fill="#888" font-size="10" text-anchor="middle">OpenFlow pipeline</text>
-        <text x="140" y="252" fill="#888" font-size="9" text-anchor="middle">VLAN tag &rarr; VNI mapping</text>
-        <line x1="130" y1="175" x2="130" y2="190" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
-
-        <!-- patch port A -->
-        <rect x="260" y="205" width="70" height="25" rx="3" fill="#1a2332" stroke="#e040fb" stroke-width="1.5"/>
-        <text x="295" y="222" fill="#e040fb" font-size="9" text-anchor="middle">patch</text>
-        <line x1="240" y1="220" x2="260" y2="220" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
-
-        <!-- br-tun A -->
-        <rect x="260" y="275" width="170" height="70" rx="6" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
-        <text x="345" y="303" fill="#448aff" font-size="13" font-weight="bold" text-anchor="middle">br-tun</text>
-        <text x="345" y="323" fill="#888" font-size="10" text-anchor="middle">VXLAN encap</text>
-        <text x="345" y="337" fill="#888" font-size="9" text-anchor="middle">VNI=1000, UDP:4789</text>
-        <line x1="295" y1="230" x2="295" y2="275" stroke="#76b900" stroke-width="2" marker-end="url(#arrow-pkt1)"/>
-
-        <!-- Physical NIC A -->
-        <rect x="280" y="365" width="140" height="25" rx="3" fill="#1a2332" stroke="#e0e0e0" stroke-width="1.5"/>
-        <text x="350" y="382" fill="#e0e0e0" font-size="10" text-anchor="middle">eth0 (100 GbE)</text>
-        <line x1="345" y1="345" x2="345" y2="365" stroke="#448aff" stroke-width="2" marker-end="url(#arrow-pkt2)"/>
-
-        <!-- Physical Network (center) -->
-        <rect x="300" y="420" width="360" height="80" rx="8" fill="#0d1117" stroke="#21262d" stroke-width="2"/>
-        <text x="480" y="448" fill="#e0e0e0" font-size="14" font-weight="bold" text-anchor="middle">Physical L3 Fabric (Leaf-Spine)</text>
-        <text x="480" y="468" fill="#888" font-size="11" text-anchor="middle">IP routed underlay &middot; ECMP &middot; MTU 9216</text>
-        <text x="480" y="485" fill="#448aff" font-size="10" text-anchor="middle">VXLAN-encapsulated packets (outer IP: 10.100.0.1 &rarr; 10.100.0.2)</text>
-        <line x1="370" y1="390" x2="400" y2="420" stroke="#448aff" stroke-width="2" marker-end="url(#arrow-pkt2)"/>
-
-        <!-- Host B -->
-        <rect x="510" y="15" width="430" height="380" rx="10" fill="#111820" stroke="#2a3a4e" stroke-width="2"/>
-        <text x="725" y="42" fill="#e0e0e0" font-size="14" font-weight="bold" text-anchor="middle">Compute Host B (10.100.0.2)</text>
-
-        <!-- VM B -->
-        <rect x="740" y="60" width="160" height="80" rx="6" fill="#0d2818" stroke="#76b900" stroke-width="2"/>
-        <text x="820" y="88" fill="#76b900" font-size="13" font-weight="bold" text-anchor="middle">VM-B</text>
-        <text x="820" y="108" fill="#888" font-size="10" text-anchor="middle">IP: 192.168.1.20</text>
-        <text x="820" y="123" fill="#888" font-size="10" text-anchor="middle">MAC: aa:bb:cc:00:00:02</text>
-
-        <!-- tap port B -->
-        <rect x="790" y="150" width="60" height="25" rx="3" fill="#1a2332" stroke="#4fc3f7" stroke-width="1.5"/>
-        <text x="820" y="167" fill="#4fc3f7" font-size="10" text-anchor="middle">tap1</text>
-        <line x1="820" y1="150" x2="820" y2="140" stroke="#76b900" stroke-width="2"/>
-
-        <!-- br-int B -->
-        <rect x="720" y="190" width="200" height="70" rx="6" fill="#1a1a0d" stroke="#ffab00" stroke-width="2"/>
-        <text x="820" y="218" fill="#ffab00" font-size="13" font-weight="bold" text-anchor="middle">br-int</text>
-        <text x="820" y="238" fill="#888" font-size="10" text-anchor="middle">OpenFlow pipeline</text>
-        <text x="820" y="252" fill="#888" font-size="9" text-anchor="middle">VNI &rarr; VLAN tag mapping</text>
-        <line x1="820" y1="190" x2="820" y2="175" stroke="#76b900" stroke-width="2"/>
-
-        <!-- patch port B -->
-        <rect x="630" y="205" width="70" height="25" rx="3" fill="#1a2332" stroke="#e040fb" stroke-width="1.5"/>
-        <text x="665" y="222" fill="#e040fb" font-size="9" text-anchor="middle">patch</text>
-        <line x1="720" y1="220" x2="700" y2="220" stroke="#76b900" stroke-width="2"/>
-
-        <!-- br-tun B -->
-        <rect x="540" y="275" width="170" height="70" rx="6" fill="#0d1a33" stroke="#448aff" stroke-width="2"/>
-        <text x="625" y="303" fill="#448aff" font-size="13" font-weight="bold" text-anchor="middle">br-tun</text>
-        <text x="625" y="323" fill="#888" font-size="10" text-anchor="middle">VXLAN decap</text>
-        <text x="625" y="337" fill="#888" font-size="9" text-anchor="middle">VNI=1000 &rarr; local VLAN</text>
-        <line x1="665" y1="275" x2="665" y2="230" stroke="#76b900" stroke-width="2"/>
-
-        <!-- Physical NIC B -->
-        <rect x="550" y="365" width="140" height="25" rx="3" fill="#1a2332" stroke="#e0e0e0" stroke-width="1.5"/>
-        <text x="620" y="382" fill="#e0e0e0" font-size="10" text-anchor="middle">eth0 (100 GbE)</text>
-        <line x1="615" y1="345" x2="615" y2="365" stroke="#448aff" stroke-width="2"/>
-
-        <!-- NIC B → underlay -->
-        <line x1="590" y1="390" x2="560" y2="420" stroke="#448aff" stroke-width="2"/>
-
-        <!-- Packet path annotation -->
-        <text x="50" y="520" fill="#76b900" font-size="11">Packet path: VM-A &rarr; tap0 &rarr; br-int (tag VLAN) &rarr; patch &rarr; br-tun (VXLAN encap, VNI=1000)</text>
-        <text x="50" y="540" fill="#448aff" font-size="11">&rarr; eth0 &rarr; Leaf-Spine fabric (L3 routed) &rarr; eth0 &rarr; br-tun (VXLAN decap) &rarr; patch &rarr; br-int (untag) &rarr; tap1 &rarr; VM-B</text>
-      </svg>
+    ethA --> net --> ethB
+      </pre>
     </div>
 
     <h4>Security: iptables/nftables for Security Groups and NAT</h4>
@@ -1123,7 +1004,10 @@ tc -s filter show dev enp3s0f0 ingress</code></pre>
     </p>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">Conntrack Zones and Packet Processing</button>
+      <div class="expandable-header">
+        <h4>Conntrack Zones and Packet Processing</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
         <p>
           Conntrack zones provide per-port isolation of connection tracking state. Each virtual

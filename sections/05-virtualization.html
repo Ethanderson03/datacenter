@@ -1,7 +1,11 @@
 <section id="virtualization" class="content-section" data-layer="4">
 
   <div class="section-header">
-    <h2>GPU Virtualization &amp; Multi-Tenancy</h2>
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="4">Layer 4</span>
+      <span class="section-number">05</span>
+    </div>
+    <h1 class="section-title">GPU Virtualization &amp; Multi-Tenancy</h1>
     <p class="section-subtitle">From QEMU/KVM fundamentals through VFIO passthrough, SR-IOV, MIG partitioning, and cloud-native GPU orchestration for HPC and AI infrastructure.</p>
   </div>
 
@@ -113,9 +117,10 @@
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        libvirt Domain XML Example &mdash; GPU Passthrough VM
-      </button>
+      <div class="expandable-header">
+        <h4>libvirt Domain XML Example &mdash; GPU Passthrough VM</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-xml">&lt;domain type='kvm'&gt;
   &lt;name&gt;gpu-worker-01&lt;/name&gt;
@@ -414,9 +419,10 @@ qemu-system-x86_64 \
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        Step 1: Enable IOMMU in BIOS and Kernel
-      </button>
+      <div class="expandable-header">
+        <h4>Step 1: Enable IOMMU in BIOS and Kernel</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Add kernel parameters via GRUB
 # For Intel:
@@ -442,9 +448,10 @@ cat /proc/cmdline
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        Step 2: Identify GPU IOMMU Group
-      </button>
+      <div class="expandable-header">
+        <h4>Step 2: Identify GPU IOMMU Group</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Find the GPU's PCI address
 lspci -nn | grep -i nvidia
@@ -468,9 +475,10 @@ done | sort -t: -k1 -n</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        Step 3: Unbind from Host Driver and Bind to VFIO
-      </button>
+      <div class="expandable-header">
+        <h4>Step 3: Unbind from Host Driver and Bind to VFIO</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Check current driver binding
 lspci -ks 41:00.0
@@ -507,9 +515,10 @@ sudo update-initramfs -u && sudo reboot</code></pre>
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        Step 4: Launch VM with VFIO GPU
-      </button>
+      <div class="expandable-header">
+        <h4>Step 4: Launch VM with VFIO GPU</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># Launch with QEMU directly
 sudo qemu-system-x86_64 \
@@ -667,9 +676,10 @@ nvidia-smi
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        NIC SR-IOV Setup &mdash; ConnectX-7 (Complete Walkthrough)
-      </button>
+      <div class="expandable-header">
+        <h4>NIC SR-IOV Setup &mdash; ConnectX-7 (Complete Walkthrough)</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># 1. Verify SR-IOV capability
 lspci -vs 31:00.0 | grep -i "sr-iov"
@@ -1096,9 +1106,10 @@ qemu-system-x86_64 -enable-kvm -m 16G -smp 4 \
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        MIG Configuration &mdash; Complete Command Reference
-      </button>
+      <div class="expandable-header">
+        <h4>MIG Configuration &mdash; Complete Command Reference</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># ===== Enable MIG Mode =====
 # Must be done once per GPU; requires GPU reset (no active processes)
@@ -1324,9 +1335,10 @@ spec:
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        vGPU Architecture &amp; Configuration
-      </button>
+      <div class="expandable-header">
+        <h4>vGPU Architecture &amp; Configuration</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-bash"># ===== Install vGPU Manager on KVM Host =====
 # Download NVIDIA-Linux-x86_64-535.161.08-vgpu-kvm.run from NVIDIA Licensing Portal
@@ -1486,9 +1498,10 @@ cat /sys/class/mdev_bus/0000:41:00.0/mdev_supported_types/nvidia-710/name
     </div>
 
     <div class="expandable">
-      <button class="expandable-toggle" aria-expanded="false">
-        KubeVirt GPU Passthrough &mdash; VirtualMachine Manifest
-      </button>
+      <div class="expandable-header">
+        <h4>KubeVirt GPU Passthrough &mdash; VirtualMachine Manifest</h4>
+        <span class="expand-icon">+</span>
+      </div>
       <div class="expandable-content">
 <pre><code class="language-yaml">apiVersion: kubevirt.io/v1
 kind: VirtualMachine

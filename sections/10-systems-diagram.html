@@ -1,13 +1,19 @@
 <section id="systems-diagram" class="content-section" data-layer="all">
 
-  <h2 class="section-title"><span class="layer-badge" data-layer="all">ALL</span> Full-Stack Systems Diagram</h2>
-  <p class="section-subtitle">An interactive, layer-by-layer view of every component in an NVIDIA DGX SuperPOD datacenter — from utility power to Kubernetes orchestration.</p>
+  <div class="section-header">
+    <div class="section-meta">
+      <span class="layer-badge" data-layer="all">All Layers</span>
+      <span class="section-number">10</span>
+    </div>
+    <h1 class="section-title">Full-Stack Systems Diagram</h1>
+    <p class="section-subtitle">An interactive, layer-by-layer view of every component in an NVIDIA DGX SuperPOD datacenter &mdash; from utility power to Kubernetes orchestration.</p>
+  </div>
 
   <div class="info-card">
     <strong>How to use:</strong> Hover over any component for a tooltip. Click to see details. Use the layer filters to isolate specific layers.
   </div>
 
-  <div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem;" id="layer-filter-bar">
+  <div class="filter-bar" id="layer-filter-bar">
     <button class="tab-btn active" onclick="filterDiagramLayer('all',this)">All Layers</button>
     <button class="tab-btn" onclick="filterDiagramLayer('physical',this)">L0 Physical</button>
     <button class="tab-btn" onclick="filterDiagramLayer('hardware',this)">L1 Hardware</button>
@@ -17,8 +23,8 @@
   </div>
 
   <!-- ========== MAIN SVG DIAGRAM ========== -->
-  <div class="diagram-container" style="overflow-x:auto;border:1px solid var(--border-color,#333);border-radius:8px;background:#080c16;padding:1rem;">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1900" width="100%" style="min-width:800px;font-family:'Inter',system-ui,sans-serif;">
+  <div class="diagram-container diagram-stage">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1900" width="100%">
       <defs>
         <linearGradient id="g-phys" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a0a0a"/><stop offset="100%" stop-color="#1a1225"/></linearGradient>
         <linearGradient id="g-hw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a1a00"/><stop offset="100%" stop-color="#1a1a2e"/></linearGradient>
@@ -471,22 +477,22 @@
   </div>
 
   <!-- ===== LEGEND ===== -->
-  <div class="info-card" style="margin-top:1.5rem;">
+  <div class="info-card stack-card">
     <h3>Legend</h3>
-    <div class="detail-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-top:0.5rem;">
-      <div><span style="display:inline-block;width:14px;height:14px;background:#ff6b6b;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Layer 0: Physical Infrastructure</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#ffd93d;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Layer 1: Hardware (DGX/GPU)</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#b44dff;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> InfiniBand Fabric (East-West)</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#4d96ff;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Ethernet Fabric (North-South)</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#00c853;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Storage Network</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#1abc9c;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Orchestration (K8s)</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#e67e22;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Monitoring</div>
-      <div><span style="display:inline-block;width:14px;height:14px;background:#9b59b6;border-radius:3px;vertical-align:middle;margin-right:6px;"></span> Virtual Networking (OVS)</div>
+    <div class="legend-grid">
+      <div class="legend-item"><span class="legend-swatch" style="background:#ff6b6b;"></span> Layer 0: Physical Infrastructure</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#ffd93d;"></span> Layer 1: Hardware (DGX/GPU)</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#b44dff;"></span> InfiniBand Fabric (East-West)</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#4d96ff;"></span> Ethernet Fabric (North-South)</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#00c853;"></span> Storage Network</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#1abc9c;"></span> Orchestration (K8s)</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#e67e22;"></span> Monitoring</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#9b59b6;"></span> Virtual Networking (OVS)</div>
     </div>
   </div>
 
   <!-- ===== PORT MAP REFERENCE ===== -->
-  <div class="info-card" style="margin-top:1.5rem;">
+  <div class="info-card stack-card">
     <h3>Port Map Quick Reference</h3>
     <table class="spec-table">
       <thead>
@@ -515,22 +521,22 @@
   </div>
 
   <!-- ===== CABLE COLOR GUIDE ===== -->
-  <div class="info-card" style="margin-top:1.5rem;">
+  <div class="info-card stack-card">
     <h3>Datacenter Cable Color Conventions</h3>
-    <div class="detail-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;margin-top:0.5rem;">
-      <div><span style="display:inline-block;width:30px;height:8px;background:#ffcc00;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Yellow</strong> — Single-mode fiber (OS2)</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#ff8800;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Orange</strong> — Multi-mode fiber (OM1/OM2)</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#00cccc;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Aqua</strong> — OM3/OM4 multi-mode (10G/40G/100G)</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#00cc00;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Lime/Green</strong> — OM5 wideband multi-mode</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#4444ff;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Blue</strong> — Cat6/Cat6a Ethernet</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#ff0000;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Red</strong> — Cross-connect / management</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#222222;border-radius:2px;vertical-align:middle;margin-right:8px;border:1px solid #666;"></span> <strong>Black</strong> — DAC (Direct Attach Copper)</div>
-      <div><span style="display:inline-block;width:30px;height:8px;background:#9933ff;border-radius:2px;vertical-align:middle;margin-right:8px;"></span> <strong>Purple</strong> — InfiniBand cables (convention)</div>
+    <div class="legend-grid compact">
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#ffcc00;"></span> <strong>Yellow</strong> &mdash; Single-mode fiber (OS2)</div>
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#ff8800;"></span> <strong>Orange</strong> &mdash; Multi-mode fiber (OM1/OM2)</div>
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#00cccc;"></span> <strong>Aqua</strong> &mdash; OM3/OM4 multi-mode (10G/40G/100G)</div>
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#00cc00;"></span> <strong>Lime/Green</strong> &mdash; OM5 wideband multi-mode</div>
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#4444ff;"></span> <strong>Blue</strong> &mdash; Cat6/Cat6a Ethernet</div>
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#ff0000;"></span> <strong>Red</strong> &mdash; Cross-connect / management</div>
+      <div class="legend-item"><span class="legend-swatch-bar dac"></span> <strong>Black</strong> &mdash; DAC (Direct Attach Copper)</div>
+      <div class="legend-item"><span class="legend-swatch-bar" style="background:#9933ff;"></span> <strong>Purple</strong> &mdash; InfiniBand cables (convention)</div>
     </div>
   </div>
 
   <!-- ===== PUTTING IT ALL TOGETHER ===== -->
-  <div class="info-card" style="margin-top:1.5rem;">
+  <div class="info-card stack-card">
     <h3>Putting It All Together: End-to-End Data Flows</h3>
 
     <div class="expandable">
@@ -554,7 +560,7 @@
       </div>
     </div>
 
-    <div class="expandable" style="margin-top:1rem;">
+    <div class="expandable">
       <div class="expandable-header">
         <h4>Distributed Training Flow (East-West)</h4>
         <span class="expand-icon">+</span>
@@ -576,7 +582,7 @@
       </div>
     </div>
 
-    <div class="expandable" style="margin-top:1rem;">
+    <div class="expandable">
       <div class="expandable-header">
         <h4>SRE Incident Response: GPU Node Down</h4>
         <span class="expand-icon">+</span>
@@ -599,10 +605,10 @@
   </div>
 
   <!-- ===== KNOWLEDGE CHECK ===== -->
-  <div class="info-card" style="margin-top:2rem;">
+  <div class="info-card stack-card-lg">
     <h3>Final Knowledge Check</h3>
 
-    <div class="quiz-question" style="margin-top:1rem;">
+    <div class="quiz-question">
       <p><strong>Q1:</strong> In a GPU SuperPOD, what is the primary fabric used for GPU-to-GPU (east-west) communication during distributed training?</p>
       <button class="quiz-answer" data-correct="false">100GbE Ethernet with RoCE</button>
       <button class="quiz-answer" data-correct="true">InfiniBand NDR 400G with NCCL</button>
@@ -610,7 +616,7 @@
       <button class="quiz-answer" data-correct="false">VXLAN overlay network</button>
     </div>
 
-    <div class="quiz-question" style="margin-top:1rem;">
+    <div class="quiz-question">
       <p><strong>Q2:</strong> An SRE sees XID 48 errors on a GPU. What is the correct immediate action?</p>
       <button class="quiz-answer" data-correct="false">Reboot the node and hope it fixes itself</button>
       <button class="quiz-answer" data-correct="false">Ignore it — single-bit ECC errors are harmless</button>
@@ -618,7 +624,7 @@
       <button class="quiz-answer" data-correct="false">Update the GPU driver to the latest version</button>
     </div>
 
-    <div class="quiz-question" style="margin-top:1rem;">
+    <div class="quiz-question">
       <p><strong>Q3:</strong> What is the standard UDP port for VXLAN encapsulation?</p>
       <button class="quiz-answer" data-correct="false">4791 (that's RoCEv2)</button>
       <button class="quiz-answer" data-correct="false">179 (that's BGP)</button>
