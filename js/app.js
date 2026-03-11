@@ -242,6 +242,35 @@ document.addEventListener('DOMContentLoaded', () => {
   const progressBar = qs('#progress-bar') || qs('.progress-bar');
   const sectionSelector = '.content-section[id], section[id], .section[id]';
   const sidebarLinkSelector = '.nav-link, .sidebar-link';
+  const sectionAliasMap = {
+    'physical-infrastructure': 'physical-infra',
+    'cooling-systems': 'cooling',
+    'facility-design': 'floor-planning',
+    'hardware': 'racks-hardware',
+    'nvlink-nvswitch': 'gpu-architecture',
+    'physical-networking': 'networking-physical',
+    'infiniband': 'infiniband-deep-dive',
+    'roce': 'roce-rdma-over-ethernet',
+    'gpudirect': 'gpudirect-technologies',
+    'bgp-routing': 'bgp',
+    'blended-isp': 'blended-isp-transit',
+    'redundancy-mlag': 'redundancy-ha',
+    'qemu-kvm': 'qemu-kvm-fundamentals',
+    'vfio-passthrough': 'gpu-passthrough-vfio',
+    'mig': 'nvidia-mig',
+    'ovs': 'ovs-deep-dive',
+    'nvme-of': 'nvme-storage',
+    'ceph': 'ceph-storage',
+    'nas-san': 'nas-storage',
+    'kubernetes-gpu-operator': 'gpu-operator',
+    'nccl': 'k8s-gpu-clusters',
+    'network-operator': 'network-operator-rdma',
+    'operations': 'monitoring-sre',
+    'dcgm-monitoring': 'monitoring-sre',
+    'prometheus-grafana': 'monitoring-sre',
+    'bmc-ipmi-redfish': 'monitoring-sre',
+    'sre-practices': 'monitoring-sre',
+  };
 
   function updateProgressBar() {
     const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -345,15 +374,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function resolveSectionId(sectionId) {
+    if (!sectionId) return sectionId;
+    if (document.getElementById(sectionId)) return sectionId;
+    return sectionAliasMap[sectionId] || sectionId;
+  }
+
+  function getOwningSectionId(target) {
+    if (!target) return null;
+    const section = target.closest(sectionSelector);
+    return section ? section.id : target.id;
+  }
+
   /**
    * Smooth scroll to a section by ID.
    */
   function scrollToSection(sectionId, behavior = 'smooth') {
-    const target = document.getElementById(sectionId);
+    const resolvedSectionId = resolveSectionId(sectionId);
+    const target = document.getElementById(resolvedSectionId);
     if (!target) return;
 
     const top =
       target.getBoundingClientRect().top + window.scrollY - SCROLL_OFFSET;
+    const activeSectionId = getOwningSectionId(target) || resolvedSectionId;
 
     window.scrollTo({
       top: Math.max(0, top),
@@ -361,9 +404,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Update state and mark visited
-    state.currentSection = sectionId;
-    updateSidebarHighlight(sectionId);
-    markSectionVisited(sectionId);
+    state.currentSection = activeSectionId;
+    updateSidebarHighlight(activeSectionId);
+    markSectionVisited(activeSectionId);
 
     // Close mobile sidebar after navigation
     if (state.sidebarOpen) {
@@ -1856,7 +1899,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const link = e.target.closest('a[href^="#"]');
       if (!link) return;
 
-      const targetId = link.getAttribute('href').slice(1);
+      const rawTargetId =
+        link.getAttribute('data-section') || link.getAttribute('href').slice(1);
+      const targetId = resolveSectionId(rawTargetId);
       if (!targetId) return;
 
       const targetEl = document.getElementById(targetId);
@@ -2013,8 +2058,10 @@ document.addEventListener('DOMContentLoaded', () => {
       item.addEventListener('click', (e) => {
         e.preventDefault();
         const targetId =
-          item.getAttribute('data-section') ||
-          item.getAttribute('href')?.slice(1);
+          resolveSectionId(
+            item.getAttribute('data-section') ||
+            item.getAttribute('href')?.slice(1)
+          );
         if (targetId) {
           scrollToSection(targetId);
         }
