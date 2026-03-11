@@ -240,6 +240,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // =========================================================================
 
   const progressBar = qs('#progress-bar') || qs('.progress-bar');
+  const sectionSelector = '.content-section[id], section[id], .section[id]';
+  const sidebarLinkSelector = '.nav-link, .sidebar-link';
 
   function updateProgressBar() {
     const scrollTop = window.scrollY || document.documentElement.scrollTop;
@@ -273,7 +275,7 @@ document.addEventListener('DOMContentLoaded', () => {
     SECTIONS.forEach((section, index) => {
       const link = createElement('a', {
         href: `#${section.id}`,
-        className: 'sidebar-link',
+        className: 'nav-link sidebar-link',
         'data-section': section.id,
       });
 
@@ -305,9 +307,15 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateSidebarHighlight(sectionId) {
     if (!sidebarNav) return;
 
-    qsa('.sidebar-link', sidebarNav).forEach((link) => {
+    qsa(sidebarLinkSelector, sidebarNav).forEach((link) => {
       const linkSection = link.getAttribute('data-section');
-      link.classList.toggle('active', linkSection === sectionId);
+      const isActive = linkSection === sectionId;
+      link.classList.toggle('active', isActive);
+      if (isActive) {
+        link.setAttribute('aria-current', 'true');
+      } else {
+        link.removeAttribute('aria-current');
+      }
     });
   }
 
@@ -317,7 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateVisitedBadges() {
     if (!sidebarNav) return;
 
-    qsa('.sidebar-link', sidebarNav).forEach((link) => {
+    qsa(sidebarLinkSelector, sidebarNav).forEach((link) => {
       const sectionId = link.getAttribute('data-section');
       if (state.visitedSections.has(sectionId)) {
         link.classList.add('visited');
@@ -370,7 +378,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!sidebarNav) return;
 
     sidebarNav.addEventListener('click', (e) => {
-      const link = e.target.closest('.sidebar-link');
+      const link = e.target.closest(sidebarLinkSelector);
       if (!link) return;
 
       e.preventDefault();
@@ -419,7 +427,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let sectionObserver = null;
 
   function initSectionAnimations() {
-    const sections = qsa('section[id], .section[id]');
+    const sections = qsa(sectionSelector);
     if (sections.length === 0) return;
 
     sectionObserver = new IntersectionObserver(
@@ -459,7 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let activeSectionObserver = null;
 
   function initActiveSectionTracking() {
-    const sections = qsa('section[id], .section[id]');
+    const sections = qsa(sectionSelector);
     if (sections.length === 0) return;
 
     activeSectionObserver = new IntersectionObserver(
@@ -1314,7 +1322,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const normalizedQuery = query.toLowerCase().trim();
     const results = [];
 
-    const sections = qsa('section[id], .section[id]');
+    const sections = qsa(sectionSelector);
 
     sections.forEach((section) => {
       const sectionId = section.id;
@@ -2151,7 +2159,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(() => scrollToSection(hash, 'auto'), 100);
     } else {
       // Mark first visible section
-      const firstSection = qs('section[id], .section[id]');
+      const firstSection = qs(sectionSelector);
       if (firstSection) {
         state.currentSection = firstSection.id;
         updateSidebarHighlight(firstSection.id);
