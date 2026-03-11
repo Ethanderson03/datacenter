@@ -942,31 +942,31 @@ graph LR
       <h4>Liquid Cooling Loop Architecture</h4>
       <div class="mermaid">
 graph TD
-  subgraph Primary["PRIMARY LOOP — Facility"]
+  subgraph Primary["PRIMARY LOOP FACILITY"]
     CT["COOLING TOWER\nEvaporative Heat Rejection\nto atmosphere"]
     CH["CHILLER PLANT\nCentrifugal Compressor\nCOP: 5.0-7.0\nN+1 Redundant\n500-2500 tons each"]
-    ECON["ECONOMIZER\nPlate HX bypass\nActive when OAT #lt; 15C"]
+    ECON["ECONOMIZER\nPlate HX bypass\nActive when OAT lt 15C"]
     PP["PRIMARY PUMPS\nVFD-driven, N+1"]
   end
 
-  subgraph Secondary["SECONDARY LOOP — IT"]
+  subgraph Secondary["SECONDARY LOOP IT"]
     CDU["CDU\nCoolant Distribution Unit\nPlate Heat Exchanger\nPumps + Reservoir\n250-1400 kW capacity"]
     RM["RACK MANIFOLD\nSupply + Return Headers\nQuick-disconnect fittings"]
-    CP["GPU/CPU COLD PLATES\n8x H100 GPU + 2x CPU\n1.5-4.0 L/min per plate\n~10.2 kW per node\nGPU Tj #lt; 83C"]
+    CP["GPU/CPU COLD PLATES\n8x H100 GPU + 2x CPU\n1.5-4.0 L/min per plate\n10.2 kW per node\nGPU Tj lt 83C"]
     LD["LEAK DETECTION\nConductive rope sensors\nAuto-shutoff valves"]
   end
 
-  CH -- "7C chilled supply" --> PP
-  PP -- "8C" --> CDU
-  CDU -- "18C primary return" --> CH
-  CT -. "29C condenser return" .-> CH
-  CH -- "35C" --> CT
+  CH -->|7C chilled supply| PP
+  PP -->|8C| CDU
+  CDU -->|18C primary return| CH
+  CT -.->|29C condenser return| CH
+  CH -->|35C| CT
   ECON -.-> PP
 
-  CDU -- "35C secondary supply" --> RM
+  CDU -->|35C secondary supply| RM
   RM --> CP
-  CP -- "50C hot return" --> RM
-  RM -- "50C secondary return" --> CDU
+  CP -->|50C hot return| RM
+  RM -->|50C secondary return| CDU
   LD -.-> RM
       </div>
       <p class="diagram-caption">Figure 2: Dual-loop liquid cooling architecture. The primary (facility) loop runs chilled water from the chiller plant through the CDU. The secondary (IT) loop circulates treated water from the CDU through rack manifolds to GPU/CPU cold plates. The two loops are hydraulically isolated by the CDU's plate heat exchanger. Temperature annotations show typical values for a direct-to-chip cooling deployment.</p>
