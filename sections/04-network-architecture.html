@@ -12,6 +12,15 @@
     <p class="section-subtitle">The network fabric is the nervous system of a GPU Superpod. Every collective operation, every gradient exchange, every activation transfer flows through this infrastructure. This section covers the topology, protocols, and redundancy mechanisms that make large-scale distributed GPU training possible.</p>
   </div>
 
+  <div class="info-card">
+    <p>
+      This section explains how the physical links are organized into an end-to-end datacenter fabric. In HPC, the architectural choices at this layer determine oversubscription, fault domains, east-west throughput, external reachability, and how gracefully the cluster behaves during link or device failures.
+    </p>
+    <p>
+      Topics covered here include spine-leaf topology, east-west and north-south traffic patterns, BGP, blended transit and ISP design, redundancy and high availability, and the routing models typically used inside GPU datacenters.
+    </p>
+  </div>
+
   <!-- ============================================================ -->
   <!-- 1. SPINE-LEAF (CLOS) TOPOLOGY                                -->
   <!-- ============================================================ -->

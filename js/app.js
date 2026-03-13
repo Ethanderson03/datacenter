@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const state = {
     currentSection: null,
+    currentSubsection: null,
     sidebarOpen: false,
     activeModal: null,
     theme: 'light',
@@ -242,6 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const progressBar = qs('#progress-bar') || qs('.progress-bar');
   const sectionSelector = '.content-section[id], section[id], .section[id]';
   const sidebarLinkSelector = '.nav-link, .sidebar-link';
+  const sidebarSubLinkSelector = '.sidebar-sublink';
   const sectionAliasMap = {
     'physical-infrastructure': 'physical-infra',
     'cooling-systems': 'cooling',
@@ -291,6 +293,164 @@ document.addEventListener('DOMContentLoaded', () => {
   const sidebar = qs('#sidebar') || qs('.sidebar');
   const sidebarNav = qs('#sidebar-nav') || qs('.sidebar-nav');
   const sidebarOverlay = qs('#sidebar-overlay') || qs('.sidebar-overlay');
+  const sectionSubsectionMap = new Map();
+
+  function slugifyText(text) {
+    return text
+      .toLowerCase()
+      .replace(/&amp;/g, 'and')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64);
+  }
+
+  function getDirectHeading(el) {
+    return Array.from(el.children).find((child) =>
+      /^H[2-4]$/.test(child.tagName)
+    ) || null;
+  }
+
+  function getSectionIntroCard(section) {
+    const header = qs('.section-header', section);
+    if (!header) return null;
+
+    let next = header.nextElementSibling;
+    while (next) {
+      if (next.classList.contains('info-card')) {
+        return next;
+      }
+      next = next.nextElementSibling;
+    }
+
+    return null;
+  }
+
+  function getSubsectionLabel(el) {
+    const heading = getDirectHeading(el);
+    if (heading) return heading.textContent.trim();
+
+    const strong = Array.from(el.children).find((child) => child.tagName === 'STRONG');
+    if (strong) return strong.textContent.trim();
+
+    if (el.id === 'layer-filter-bar') return 'Layer Filters';
+    if (el.classList.contains('diagram-container')) return 'Interactive Diagram';
+    return null;
+  }
+
+  function getSectionSubsections(section) {
+    if (sectionSubsectionMap.has(section.id)) {
+      return sectionSubsectionMap.get(section.id);
+    }
+
+    const introCard = getSectionIntroCard(section);
+    const subsectionEntries = [];
+    const usedIds = new Set();
+
+    Array.from(section.children).forEach((child, index) => {
+      if (child.classList.contains('section-header') || child === introCard) return;
+
+      const isCandidate =
+        child.matches('.subsection, .info-card, .quiz-section, .filter-bar, .diagram-container') ||
+        /^H[23]$/.test(child.tagName);
+
+      if (!isCandidate) return;
+
+      const label = getSubsectionLabel(child);
+      if (!label) return;
+
+      let anchor = child;
+      const heading = getDirectHeading(child);
+      if (!anchor.id && heading && heading.id) {
+        anchor = heading;
+      }
+
+      if (!anchor.id) {
+        const baseId = `${section.id}-${slugifyText(label) || `topic-${index + 1}`}`;
+        let generatedId = baseId;
+        let counter = 2;
+        while (document.getElementById(generatedId) || usedIds.has(generatedId)) {
+          generatedId = `${baseId}-${counter}`;
+          counter += 1;
+        }
+        anchor.id = generatedId;
+      }
+
+      usedIds.add(anchor.id);
+      subsectionEntries.push({ id: anchor.id, label });
+    });
+
+    sectionSubsectionMap.set(section.id, subsectionEntries);
+    return subsectionEntries;
+  }
+
+  function buildSectionTopicNav() {
+    qsa(sectionSelector).forEach((section) => {
+      if (section.id === 'overview') return;
+
+      const introCard = getSectionIntroCard(section);
+      if (!introCard || qs('.section-topic-nav', introCard)) return;
+
+      const subsections = getSectionSubsections(section);
+      if (subsections.length === 0) return;
+
+      const nav = createElement('div', { className: 'section-topic-nav' });
+      nav.appendChild(
+        createElement('h4', {
+          className: 'section-topic-heading',
+          textContent: 'Topics Covered',
+        })
+      );
+
+      const list = createElement('div', { className: 'section-topic-list' });
+      subsections.forEach((item) => {
+        list.appendChild(
+          createElement('a', {
+            href: `#${item.id}`,
+            className: 'section-topic-link',
+            'data-section': item.id,
+            textContent: item.label,
+          })
+        );
+      });
+
+      nav.appendChild(list);
+      introCard.appendChild(nav);
+    });
+  }
+
+  function buildSidebarSubnav() {
+    if (!sidebarNav) return;
+
+    qsa('li', sidebarNav).forEach((item) => {
+      const topLink = qs(sidebarLinkSelector, item);
+      if (!topLink) return;
+
+      const sectionId = topLink.getAttribute('data-section');
+      if (!sectionId) return;
+
+      const section = document.getElementById(sectionId);
+      if (!section) return;
+
+      const subsections = getSectionSubsections(section);
+      if (subsections.length === 0 || qs('.sidebar-subnav', item)) return;
+
+      const subnav = createElement('ul', { className: 'sidebar-subnav' });
+      subsections.forEach((entry) => {
+        const subItem = createElement('li');
+        subItem.appendChild(
+          createElement('a', {
+            href: `#${entry.id}`,
+            className: 'sidebar-sublink',
+            'data-section': entry.id,
+            textContent: entry.label,
+          })
+        );
+        subnav.appendChild(subItem);
+      });
+
+      item.appendChild(subnav);
+    });
+  }
 
   /**
    * Build sidebar navigation links if a nav container exists but is empty.
@@ -302,6 +462,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sidebarNav.children.length > 0) return;
 
     SECTIONS.forEach((section, index) => {
+      const listItem = createElement('li');
       const link = createElement('a', {
         href: `#${section.id}`,
         className: 'nav-link sidebar-link',
@@ -326,7 +487,8 @@ document.addEventListener('DOMContentLoaded', () => {
       link.appendChild(number);
       link.appendChild(label);
       link.appendChild(badge);
-      sidebarNav.appendChild(link);
+      listItem.appendChild(link);
+      sidebarNav.appendChild(listItem);
     });
   }
 
@@ -340,11 +502,38 @@ document.addEventListener('DOMContentLoaded', () => {
       const linkSection = link.getAttribute('data-section');
       const isActive = linkSection === sectionId;
       link.classList.toggle('active', isActive);
+      const listItem = link.closest('li');
+      if (listItem) {
+        listItem.classList.toggle('expanded', isActive);
+      }
       if (isActive) {
         link.setAttribute('aria-current', 'true');
       } else {
         link.removeAttribute('aria-current');
       }
+    });
+  }
+
+  function updateSidebarSubsectionHighlight(subsectionId, sectionId = state.currentSection) {
+    if (!sidebarNav) return;
+
+    qsa(sidebarSubLinkSelector, sidebarNav).forEach((link) => {
+      const isActive = link.getAttribute('data-section') === subsectionId;
+      link.classList.toggle('active', isActive);
+      if (isActive) {
+        link.setAttribute('aria-current', 'location');
+      } else {
+        link.removeAttribute('aria-current');
+      }
+    });
+
+    qsa('li', sidebarNav).forEach((item) => {
+      const topLink = qs(sidebarLinkSelector, item);
+      if (!topLink) return;
+      item.classList.toggle(
+        'expanded',
+        topLink.getAttribute('data-section') === sectionId
+      );
     });
   }
 
@@ -405,7 +594,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update state and mark visited
     state.currentSection = activeSectionId;
+    state.currentSubsection =
+      activeSectionId === resolvedSectionId ? null : resolvedSectionId;
     updateSidebarHighlight(activeSectionId);
+    updateSidebarSubsectionHighlight(state.currentSubsection, activeSectionId);
     markSectionVisited(activeSectionId);
 
     // Close mobile sidebar after navigation
@@ -421,7 +613,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!sidebarNav) return;
 
     sidebarNav.addEventListener('click', (e) => {
-      const link = e.target.closest(sidebarLinkSelector);
+      const link = e.target.closest(
+        `${sidebarLinkSelector}, ${sidebarSubLinkSelector}`
+      );
       if (!link) return;
 
       e.preventDefault();
@@ -507,43 +701,44 @@ document.addEventListener('DOMContentLoaded', () => {
   // ACTIVE SECTION TRACKING (for sidebar highlight on scroll)
   // =========================================================================
 
-  let activeSectionObserver = null;
-
   function initActiveSectionTracking() {
     const sections = qsa(sectionSelector);
     if (sections.length === 0) return;
+    const updateActiveSection = throttle(() => {
+      const viewportAnchor = window.scrollY + SCROLL_OFFSET + 24;
+      let activeSection = sections[0];
 
-    activeSectionObserver = new IntersectionObserver(
-      (entries) => {
-        // Find the entry most in view
-        let bestEntry = null;
-        let bestRatio = 0;
+      sections.forEach((section) => {
+        if (section.offsetTop <= viewportAnchor) {
+          activeSection = section;
+        }
+      });
 
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && entry.intersectionRatio > bestRatio) {
-            bestRatio = entry.intersectionRatio;
-            bestEntry = entry;
+      const sectionId = activeSection?.id;
+      if (sectionId && sectionId !== state.currentSection) {
+        state.currentSection = sectionId;
+        updateSidebarHighlight(sectionId);
+        markSectionVisited(sectionId);
+      }
+
+      if (sectionId) {
+        let activeSubsectionId = null;
+        const subsections = getSectionSubsections(activeSection);
+        subsections.forEach((entry) => {
+          const target = document.getElementById(entry.id);
+          if (target && target.offsetTop <= viewportAnchor) {
+            activeSubsectionId = entry.id;
           }
         });
-
-        if (bestEntry) {
-          const sectionId = bestEntry.target.id;
-          if (sectionId && sectionId !== state.currentSection) {
-            state.currentSection = sectionId;
-            updateSidebarHighlight(sectionId);
-            markSectionVisited(sectionId);
-          }
-        }
-      },
-      {
-        rootMargin: `-${SCROLL_OFFSET}px 0px -50% 0px`,
-        threshold: [0, 0.25, 0.5, 0.75, 1],
+        state.currentSubsection = activeSubsectionId;
+        updateSidebarSubsectionHighlight(activeSubsectionId, sectionId);
       }
-    );
+    }, 50);
 
-    sections.forEach((section) => {
-      activeSectionObserver.observe(section);
-    });
+    window.addEventListener('scroll', updateActiveSection, { passive: true });
+    window.addEventListener('resize', updateActiveSection);
+    window.addEventListener('load', updateActiveSection, { once: true });
+    updateActiveSection();
   }
 
   // =========================================================================
@@ -2165,6 +2360,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Build dynamic sidebar nav if needed
     buildSidebarNav();
+    buildSectionTopicNav();
+    buildSidebarSubnav();
 
     // Initialize all modules
     initScrollHandler();
